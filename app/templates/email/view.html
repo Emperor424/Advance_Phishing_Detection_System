@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+{% block title %}{{ email.subject or '(No Subject)' }} — PhishGuard{% endblock %}
+{% block content %}
+
+{% set clf = email.classification %}
+{% set nlp = email.nlp_analysis %}
+{% set hdr = email.header_analysis %}
+
+<!-- Fix 2: Check if CURRENT USER actually sent this email -->
+{% set i_sent_this = current_user.email|lower in (email.sender_email or '')|lower %}
+{% set is_my_sent = email.email_direction == 'sent' and i_sent_this %}
+{% set is_draft   = email.folder_status == 'draft' %}
+
+<!-- ── Header ── -->
+<div class="page-header" style="margin-bottom:12px;">
+  <a href="{{ url_for('email.inbox') }}" class="btn btn-ghost">← Back</a>
+  <div style="display:flex;gap:4px;">
+    {% if prev_id %}<a href="{{ url_for('email.view', email_id=prev_id) }}" class="btn btn-ghost btn-sm">‹ Prev</a>{% endif %}
+    {% if next_id %}<a href="{{ url_for('email.view', email_id=next_id) }}" class="btn btn-ghost btn-sm">Next ›</a>{% endif %}
+  </div>
+  <h1 class="page-title" style="font-size:17px;flex:1;margin:0 12px;">
+    {{ email.subject or '(No Subject)' }}
+  </h1>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+    <!-- Star -->
+    <form method="POST" action="{{ url_for('email.toggle_star', email_id=email.email_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-ghost btn-sm" type="submit" style="font-size:18px;padding:5px 10px;">
+        {{ '⭐' if email.is_starred else '☆' }}
+      </button>
+    </form>
+
+    {% if not is_my_sent and not is_draft %}
+    <a href="{{ url_for('email.reply',   email_id=email.email_id) }}" class="btn btn-secondary btn-sm">↩️ Reply</a>
+    <a href="{{ url_for('email.forward', email_id=email.email_id) }}" class="btn btn-secondary btn-sm">↪️ Forward</a>
+    <form method="POST" action="{{ url_for('email.mark_unread', email_id=email.email_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-secondary btn-sm" type="submit">📧 Mark Unread</button>
+    </form>
+    {% if email.folder_status != 'archive' %}
+    <form method="POST" action="{{ url_for('email.archive', email_id=email.email_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-secondary btn-sm" type="submit">🗄️ Archive</button>
+    </form>
+    {% endif %}
+    {% if email.folder_status != 'quarantine' %}
+    <form method="POST" action="{{ url_for('email.move_to_quarantine', email_id=email.email_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-warning btn-sm" type="submit" onclick="return confirm('Move to quarantine?')">🔒 Quarantine</button>
+    </form>
+    {% endif %}
+    {% endif %}
+
+    {% if email.folder_status == 'trash' %}
+    <form method="POST" action="{{ url_for('email.restore', email_id=email.email_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-secondary btn-sm" type="submit">↩️ Restore</button>
+    </form>
+    <form method="POST" action="{{ url_for('email.delete_permanent', email_id=email.email_id) }}"
+          onsubmit="return confirm('Permanently delete?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-danger btn-sm" type="submit">⛔ Delete Forever</button>
+    </form>
+    {% else %}
+    <form method="POST" action="{{ url_for('email.delete_email', email_id=email.email_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-danger btn-sm" type="submit" onclick="return confirm('Move to Trash?')">🗑️ Delete</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ══ SECURITY SECTION ══ -->
+{% if is_my_sent or is_draft %}
+<!-- Sent by me OR Draft -->
+<div class="sec-banner" style="background:#f0fdf4;border:2px solid #22c55e;margin-bottom:12px;">
+  <div class="banner-left">
+    <div class="banner-icon">{{ '📝' if is_draft else '📤' }}</div>
+    <div>
+      <div class="banner-title" style="color:#15803d;">{{ 'DRAFT' if is_draft else 'SENT EMAIL' }}</div>
+      <div class="banner-sub" style="color:#166534;">
+        {% if is_draft %}
+          This is a saved draft.
+          <a href="{{ url_for('email.compose', draft_id=email.email_id) }}"
+             style="color:#15803d;font-weight:700;">Edit Draft →</a>
+        {% else %}
+          Sent by you — no security analysis needed.
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% elif clf %}
+  <!-- Classification banner -->
+  {% if clf.label == 'phishing' %}
+  <div class="sec-banner banner-phishing" style="margin-bottom:8px;">
+    <div class="banner-left">
+      <div class="banner-icon">🚨</div>
+      <div>
+        <div class="banner-title">PHISHING EMAIL DETECTED</div>
+        <div class="banner-sub">Do NOT click any links or provide personal information.</div>
+      </div>
+    </div>
+    <div class="banner-score-box score-red">
+      <div class="banner-score-num">{{ clf.risk_score|round|int }}</div>
+      <div class="banner-score-label">Risk Score</div>
+    </div>
+  </div>
+  {% elif clf.label == 'suspicious' %}
+  <div class="sec-banner banner-suspicious" style="margin-bottom:8px;">
+    <div class="banner-left">
+      <div class="banner-icon">⚠️</div>
+      <div>
+        <div class="banner-title">SUSPICIOUS EMAIL</div>
+        <div class="banner-sub">Be careful before clicking links or replying.</div>
+      </div>
+    </div>
+    <div class="banner-score-box score-amber">
+      <div class="banner-score-num">{{ clf.risk_score|round|int }}</div>
+      <div class="banner-score-label">Risk Score</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="sec-banner banner-safe" style="margin-bottom:8px;">
+    <div class="banner-left">
+      <div class="banner-icon">✅</div>
+      <div>
+        <div class="banner-title" style="color:#15803d;">EMAIL LOOKS SAFE</div>
+        <div class="banner-sub" style="color:#166534;">Passed all security checks.</div>
+      </div>
+    </div>
+    <div class="banner-score-box score-green">
+      <div class="banner-score-num">{{ clf.risk_score|round|int }}</div>
+      <div class="banner-score-label">Risk Score</div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- WHY FLAGGED -->
+  {% if clf.label in ['phishing','suspicious'] %}
+  <div class="reasons-card" style="margin-bottom:8px;">
+    <div class="reasons-header">
+      <div class="reasons-title-text">
+        🔍 Why is this email in {% if clf.label=='phishing' %}Quarantine{% else %}Spam{% endif %}?
+      </div>
+      <div class="reasons-gauge-wrap">
+        <div class="gauge-label-row">
+          <span style="color:#22c55e;font-size:11px;font-weight:600;">Safe</span>
+          <span style="color:#f59e0b;font-size:11px;font-weight:600;">Suspicious</span>
+          <span style="color:#dc2626;font-size:11px;font-weight:600;">Phishing</span>
+        </div>
+        <div class="reasons-gauge">
+          <div class="gauge-needle" style="left:{{ clf.risk_score }}%;">
+            <div class="needle-tip"></div>
+            <div class="needle-val">{{ clf.risk_score|round|int }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="reasons-grid">
+      {% if nlp and nlp.urgency_score > 15 %}
+      <div class="reason-box reason-{{ 'high' if nlp.urgency_score > 50 else 'medium' }}">
+        <div class="reason-box-icon">⏰</div>
+        <div class="reason-box-content">
+          <div class="reason-box-title">Urgent Language</div>
+          <div class="reason-box-desc">Pressure words like "urgent", "act now", "suspended".</div>
+          <div class="reason-box-score">
+            <div class="rscore-bar"><div class="rscore-fill rfill-red" style="width:{{ nlp.urgency_score }}%"></div></div>
+            <span>{{ nlp.urgency_score|round|int }}/100</span>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+      {% if nlp and nlp.impersonation_score > 10 %}
+      <div class="reason-box reason-high">
+        <div class="reason-box-icon">🎭</div>
+        <div class="reason-box-content">
+          <div class="reason-box-title">Brand Impersonation</div>
+          <div class="reason-box-desc">Claims to be from a known brand but sender domain doesn't match.</div>
+          <div class="reason-box-score">
+            <div class="rscore-bar"><div class="rscore-fill rfill-red" style="width:{{ nlp.impersonation_score }}%"></div></div>
+            <span>{{ nlp.impersonation_score|round|int }}/100</span>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+      {% set bad_links  = email.link_analyses|selectattr('mismatch_flag')|list  if email.link_analyses else [] %}
+      {% set homo_links = email.link_analyses|selectattr('homoglyph_flag')|list if email.link_analyses else [] %}
+      {% if bad_links or homo_links %}
+      <div class="reason-box reason-high">
+        <div class="reason-box-icon">🔗</div>
+        <div class="reason-box-content">
+          <div class="reason-box-title">Suspicious Links Found</div>
+          <div class="reason-box-desc">{% if homo_links %}Lookalike domain detected.{% else %}Link text doesn't match URL.{% endif %}</div>
+          {% for link in email.link_analyses[:2] %}{% if link.mismatch_flag or link.homoglyph_flag %}
+          <div class="link-chip">🔴 {{ link.href_url[:50] if link.href_url else '' }}</div>
+          {% endif %}{% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      {% if hdr and (hdr.spf_result in ['fail','softfail','none'] or not hdr.dkim_valid) %}
+      <div class="reason-box reason-medium">
+        <div class="reason-box-icon">🔐</div>
+        <div class="reason-box-content">
+          <div class="reason-box-title">Authentication Failed</div>
+          <div class="reason-box-desc">Email failed SPF/DKIM checks.</div>
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+            <span class="auth-chip chip-{{ 'fail' if hdr.spf_result != 'pass' else 'pass' }}">SPF: {{ hdr.spf_result|upper }}</span>
+            <span class="auth-chip chip-{{ 'pass' if hdr.dkim_valid else 'fail' }}">DKIM: {{ 'VALID' if hdr.dkim_valid else 'INVALID' }}</span>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+      {% if nlp and nlp.suspicious_keywords %}
+      <div class="reason-box reason-medium">
+        <div class="reason-box-icon">🔑</div>
+        <div class="reason-box-content">
+          <div class="reason-box-title">Suspicious Keywords</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">
+            {% for kw in nlp.suspicious_keywords.split(', ')[:8] %}<span class="kw-chip">{{ kw }}</span>{% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    <div class="reasons-actions">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <span style="font-size:13px;color:#6b7280;">Is this wrong?</span>
+        {% if feedback %}
+        <span style="font-size:13px;color:#15803d;font-weight:600;">✓ Marked {{ feedback.user_label|upper }}</span>
+        {% else %}
+        <form method="POST" action="{{ url_for('email.submit_feedback', email_id=email.email_id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button name="label" value="safe" class="btn btn-sm btn-success" type="submit">✓ Mark Safe</button>
+        </form>
+        <form method="POST" action="{{ url_for('email.submit_feedback', email_id=email.email_id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button name="label" value="phishing" class="btn btn-sm btn-danger" type="submit">⚠ Confirm Phishing</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+{% else %}
+  <!-- No classification yet -->
+  {% if email.email_direction == 'sent' and not i_sent_this %}
+  <!-- Received email that happens to have direction=sent (e.g. admin sent to this user) -->
+  <div class="sec-banner" style="background:#f9fafb;border:1px solid #e5e7eb;margin-bottom:12px;">
+    <div class="banner-left">
+      <div class="banner-icon" style="animation:spin 2s linear infinite;">⏳</div>
+      <div>
+        <div class="banner-title" style="color:#374151;">Analysing email...</div>
+        <div class="banner-sub" style="color:#6b7280;">AI check running — updates automatically.</div>
+      </div>
+    </div>
+    <div style="color:#9ca3af;font-size:13px;">Refreshing in <span id="cd">3</span>s...</div>
+  </div>
+  <style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style>
+  <script>let c=3;const cd=document.getElementById('cd');setInterval(()=>{c--;if(cd)cd.textContent=c;if(c<=0)location.reload();},1000);</script>
+  {% elif not is_my_sent %}
+  <div class="sec-banner" style="background:#f9fafb;border:1px solid #e5e7eb;margin-bottom:12px;">
+    <div class="banner-left">
+      <div class="banner-icon" style="animation:spin 2s linear infinite;">⏳</div>
+      <div>
+        <div class="banner-title" style="color:#374151;">Analysing email...</div>
+        <div class="banner-sub" style="color:#6b7280;">AI check running — updates automatically.</div>
+      </div>
+    </div>
+    <div style="color:#9ca3af;font-size:13px;">Refreshing in <span id="cd2">3</span>s...</div>
+  </div>
+  <style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style>
+  <script>let c2=3;const cd2=document.getElementById('cd2');setInterval(()=>{c2--;if(cd2)cd2.textContent=c2;if(c2<=0)location.reload();},1000);</script>
+  {% endif %}
+{% endif %}
+
+<!-- ══ Email Content ══ -->
+<div class="card" style="margin-top:12px;padding:24px;">
+  <table style="font-size:13px;color:#374151;border-collapse:collapse;width:100%;margin-bottom:16px;">
+    <tr>
+      <td style="padding:5px 16px 5px 0;color:#9ca3af;font-weight:600;width:70px;">From</td>
+      <td>{{ email.sender_email }}</td>
+    </tr>
+    <tr>
+      <td style="padding:5px 16px 5px 0;color:#9ca3af;font-weight:600;">To</td>
+      <td>{{ email.receiver_email }}</td>
+    </tr>
+    <tr>
+      <td style="padding:5px 16px 5px 0;color:#9ca3af;font-weight:600;">Date</td>
+      <td>
+        <!-- Fix 1: Local time -->
+        <span id="email-date"
+              data-utc="{{ email.received_time.strftime('%Y-%m-%dT%H:%M:%SZ') if email.received_time else '' }}">
+          {{ email.received_time.strftime('%A, %B %d %Y at %H:%M UTC') if email.received_time else '—' }}
+        </span>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:5px 16px 5px 0;color:#9ca3af;font-weight:600;">Subject</td>
+      <td style="font-weight:700;color:#111827;">{{ email.subject or '(No Subject)' }}</td>
+    </tr>
+  </table>
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 16px;">
+  <div style="font-size:14px;line-height:1.8;white-space:pre-wrap;color:#374151;">
+    {{ email.email_body or '(Empty body)' }}
+  </div>
+</div>
+
+<!-- Bottom actions -->
+<div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+  <a href="{{ url_for('email.inbox') }}" class="btn btn-ghost">← Back to Inbox</a>
+  {% if not is_my_sent and not is_draft %}
+  <a href="{{ url_for('email.reply', email_id=email.email_id) }}" class="btn btn-primary">↩️ Reply</a>
+  <a href="{{ url_for('email.forward', email_id=email.email_id) }}" class="btn btn-secondary">↪️ Forward</a>
+  {% if email.folder_status != 'archive' %}
+  <form method="POST" action="{{ url_for('email.archive', email_id=email.email_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-secondary" type="submit">🗄️ Archive</button>
+  </form>
+  {% endif %}
+  {% if email.folder_status == 'trash' %}
+  <form method="POST" action="{{ url_for('email.restore', email_id=email.email_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-secondary" type="submit">↩️ Restore</button>
+  </form>
+  {% else %}
+  <form method="POST" action="{{ url_for('email.delete_email', email_id=email.email_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-danger" type="submit" onclick="return confirm('Move to Trash?')">🗑️ Delete</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+
+<!-- Styles -->
+<style>
+.sec-banner{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+.banner-phishing{background:#fef2f2;border:2px solid #dc2626;}
+.banner-suspicious{background:#fffbeb;border:2px solid #f59e0b;}
+.banner-safe{background:#f0fdf4;border:2px solid #22c55e;}
+.banner-left{display:flex;align-items:center;gap:12px;flex:1;}
+.banner-icon{font-size:32px;flex-shrink:0;}
+.banner-title{font-size:17px;font-weight:900;color:#111827;}
+.banner-phishing .banner-title{color:#991b1b;}
+.banner-suspicious .banner-title{color:#92400e;}
+.banner-sub{font-size:13px;margin-top:2px;color:#6b7280;}
+.banner-score-box{text-align:center;border-radius:10px;padding:10px 18px;flex-shrink:0;margin-left:14px;}
+.score-red{background:#dc2626;}.score-amber{background:#f59e0b;}.score-green{background:#22c55e;}
+.banner-score-num{font-size:32px;font-weight:900;color:#fff;line-height:1;}
+.banner-score-label{font-size:11px;color:rgba(255,255,255,.8);font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-top:2px;}
+.reasons-card{background:#fff;border-radius:10px;border:1px solid #e5e7eb;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow:hidden;}
+.reasons-header{padding:14px 18px;background:#f9fafb;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+.reasons-title-text{font-size:14px;font-weight:800;color:#111827;}
+.reasons-gauge-wrap{min-width:180px;}
+.gauge-label-row{display:flex;justify-content:space-between;margin-bottom:4px;}
+.reasons-gauge{position:relative;height:10px;border-radius:5px;overflow:visible;background:linear-gradient(to right,#22c55e 0% 40%,#f59e0b 40% 65%,#dc2626 65% 100%);}
+.gauge-needle{position:absolute;top:-4px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;}
+.needle-tip{width:3px;height:18px;background:#111827;border-radius:2px;}
+.needle-val{font-size:10px;font-weight:900;color:#111827;background:#fff;border:1px solid #e5e7eb;border-radius:4px;padding:1px 5px;margin-top:2px;white-space:nowrap;}
+.reasons-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px 18px;}
+.reason-box{display:flex;gap:10px;padding:12px;border-radius:8px;border:1px solid;}
+.reason-high{background:#fff5f5;border-color:#fecaca;}
+.reason-medium{background:#fffbeb;border-color:#fde68a;}
+.reason-box-icon{font-size:22px;flex-shrink:0;margin-top:1px;}
+.reason-box-title{font-size:13px;font-weight:800;color:#111827;margin-bottom:3px;}
+.reason-box-desc{font-size:12px;color:#6b7280;line-height:1.5;}
+.reason-box-score{display:flex;align-items:center;gap:8px;margin-top:6px;}
+.rscore-bar{flex:1;height:5px;background:#f3f4f6;border-radius:3px;overflow:hidden;}
+.rscore-fill{height:100%;border-radius:3px;}
+.rfill-red{background:#dc2626;}.rfill-amber{background:#f59e0b;}
+.reason-box-score span{font-size:11px;font-weight:700;color:#374151;white-space:nowrap;}
+.auth-chip{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;}
+.chip-pass{background:#dcfce7;color:#15803d;}.chip-fail{background:#fee2e2;color:#991b1b;}
+.link-chip{background:#fee2e2;color:#991b1b;font-size:11px;padding:3px 8px;border-radius:4px;margin-top:3px;font-family:monospace;word-break:break-all;display:block;}
+.kw-chip{background:#fef3c7;color:#92400e;font-size:11px;padding:2px 8px;border-radius:20px;font-weight:600;}
+.reasons-actions{display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:#f9fafb;border-top:1px solid #e5e7eb;flex-wrap:wrap;gap:8px;}
+@media(max-width:700px){.reasons-grid{grid-template-columns:1fr;}.banner-score-box{display:none;}}
+</style>
+
+<!-- Fix 1: Convert UTC to local time -->
+<script>
+(function() {
+  const el  = document.getElementById('email-date');
+  const utc = el ? el.dataset.utc : null;
+  if (!utc) return;
+  try {
+    const d = new Date(utc);
+    if (isNaN(d)) return;
+    el.textContent = d.toLocaleString([], {
+      weekday: 'long', year: 'numeric',
+      month:   'long', day: 'numeric',
+      hour:    '2-digit', minute: '2-digit'
+    });
+  } catch(e) {}
+})();
+</script>
+
+{% endblock %}

@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard — PhishGuard{% endblock %}
+{% block content %}
+
+<div class="page-header" style="margin-bottom:20px;">
+  <div>
+    <h1 class="page-title">Admin Dashboard</h1>
+    <div style="font-size:13px;color:#6b7280;margin-top:2px;">
+      Real-time phishing detection monitor
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <span class="badge badge-info">Model {{ model_version }}</span>
+    <a href="{{ url_for('email.inbox') }}" class="btn btn-secondary">📥 View Emails</a>
+    <form method="POST" action="{{ url_for('admin.send_digest_now') }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-primary" type="submit">📧 Send Digest Now</button>
+    </form>
+  </div>
+</div>
+
+<!-- Metric Cards -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
+
+  <div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #1d4ed8;
+       border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+    <div style="font-size:11px;font-weight:700;color:#9ca3af;
+         text-transform:uppercase;letter-spacing:.06em;">Emails Today</div>
+    <div style="font-size:36px;font-weight:900;color:#111827;margin-top:4px;">
+      {{ total_emails_today }}
+    </div>
+    <div style="font-size:12px;color:#9ca3af;margin-top:4px;">Processed by PhishGuard</div>
+  </div>
+
+  <div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #dc2626;
+       border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+    <div style="font-size:11px;font-weight:700;color:#9ca3af;
+         text-transform:uppercase;letter-spacing:.06em;">Phishing Detected</div>
+    <div style="font-size:36px;font-weight:900;color:#dc2626;margin-top:4px;">
+      {{ phishing_today }}
+    </div>
+    <div style="font-size:12px;color:#9ca3af;margin-top:4px;">Quarantined automatically</div>
+  </div>
+
+  <div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #f59e0b;
+       border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+    <div style="font-size:11px;font-weight:700;color:#9ca3af;
+         text-transform:uppercase;letter-spacing:.06em;">Quarantine Rate</div>
+    <div style="font-size:36px;font-weight:900;color:#111827;margin-top:4px;">
+      {{ quarantine_rate }}%
+    </div>
+    <div style="font-size:12px;color:#9ca3af;margin-top:4px;">Of today's emails</div>
+  </div>
+
+  <div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #22c55e;
+       border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+    <div style="font-size:11px;font-weight:700;color:#9ca3af;
+         text-transform:uppercase;letter-spacing:.06em;">Feedback Samples</div>
+    <div style="font-size:36px;font-weight:900;color:#15803d;margin-top:4px;">
+      {{ feedback_count }}
+    </div>
+    <div style="font-size:12px;color:#9ca3af;margin-top:4px;">Used for model training</div>
+  </div>
+
+</div>
+
+<!-- Two column grid -->
+<div style="display:grid;grid-template-columns:1fr 380px;gap:20px;">
+
+  <!-- Left -->
+  <div style="display:flex;flex-direction:column;gap:20px;">
+
+    <!-- Chart -->
+    <div class="card">
+      <div class="card-header">📈 Risk Score Distribution (Last 7 Days)</div>
+      <div style="padding:20px;">
+        <canvas id="scoreChart" height="150"></canvas>
+      </div>
+    </div>
+
+    <!-- Threshold -->
+    <div class="card">
+      <div class="card-header">⚙️ Quarantine Threshold</div>
+      <div style="padding:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <span style="font-size:13px;color:#374151;font-weight:600;">
+            Sensitivity Setting
+          </span>
+          <span style="font-size:32px;font-weight:900;color:#1b2a4a;">
+            <span id="threshold-label">{{ threshold }}</span>/100
+          </span>
+        </div>
+        <form method="POST" action="{{ url_for('admin.update_threshold') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="range" id="threshold-slider" name="threshold"
+                 min="0" max="100" value="{{ threshold }}"
+                 oninput="updateThreshold(this.value)"
+                 style="width:100%;margin:8px 0;accent-color:#1d4ed8;">
+          <div style="display:flex;justify-content:space-between;font-size:11px;
+               color:#9ca3af;margin-bottom:12px;">
+            <span>Strict (more quarantined)</span>
+            <span>Lenient (fewer quarantined)</span>
+          </div>
+          <p id="preview-text"
+             style="font-size:13px;color:#6b7280;background:#f9fafb;
+             padding:10px 14px;border-radius:8px;margin-bottom:14px;">
+            Loading...
+          </p>
+          <button class="btn btn-primary" type="submit">💾 Save Threshold</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Recent Quarantine -->
+    <div class="card">
+      <div class="card-header">
+        🔒 Recent Quarantined Emails
+        <a href="{{ url_for('quarantine.index') }}" class="card-action">View all →</a>
+      </div>
+      {% if recent_quarantine %}
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Subject</th><th>From</th>
+            <th>Score</th><th>Label</th><th>Time</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for qi in recent_quarantine %}
+          {% set clf = qi.email.classification %}
+          <tr>
+            <td style="max-width:200px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">
+              <a href="{{ url_for('email.view', email_id=qi.email_id) }}"
+                 style="color:#1d4ed8;text-decoration:none;font-weight:500;">
+                {{ qi.email.subject[:50] if qi.email.subject else '(No Subject)' }}
+              </a>
+            </td>
+            <td style="font-size:12px;color:#6b7280;">
+              {{ qi.email.sender_email[:30] }}
+            </td>
+            <td>
+              <span class="risk-badge
+                {% if clf and clf.risk_score >= 70 %}risk-high
+                {% elif clf and clf.risk_score >= 40 %}risk-medium
+                {% else %}risk-low{% endif %}">
+                {{ (clf.risk_score|round|int) if clf else '?' }}
+              </span>
+            </td>
+            <td>
+              <span class="label-badge label-{{ clf.label if clf else 'unknown' }}">
+                {{ (clf.label|upper) if clf else '?' }}
+              </span>
+            </td>
+            <td style="font-size:12px;color:#9ca3af;">
+              {{ qi.quarantined_at.strftime('%b %d %H:%M') }}
+            </td>
+            <td>
+              <a href="{{ url_for('quarantine.release', quarantine_id=qi.quarantine_id) }}"
+                 class="btn btn-sm btn-success"
+                 onclick="return confirm('Release this email?')">Release</a>
+              <a href="{{ url_for('quarantine.delete',  quarantine_id=qi.quarantine_id) }}"
+                 class="btn btn-sm btn-danger"
+                 onclick="return confirm('Delete permanently?')">Delete</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-state">✅ No emails currently quarantined.</div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- Right Column -->
+  <div style="display:flex;flex-direction:column;gap:20px;">
+
+    <!-- System Status -->
+    <div class="card">
+      <div class="card-header">🖥️ System Status</div>
+      <div style="padding:16px;">
+        {% set status_rows = [
+          ('Flask Server',   'Running',   'green'),
+          ('MySQL Database', 'Connected', 'green'),
+          ('ML Model',       model_version, 'green'),
+          ('IMAP Sync',      'Active',    'green'),
+        ] %}
+        {% for label, value, color in status_rows %}
+        <div style="display:flex;justify-content:space-between;align-items:center;
+             padding:9px 0;border-bottom:1px solid #f9fafb;font-size:13px;">
+          <span style="color:#374151;">{{ label }}</span>
+          <span style="background:#dcfce7;color:#15803d;padding:2px 10px;
+               border-radius:20px;font-size:11px;font-weight:700;">
+            {{ value }}
+          </span>
+        </div>
+        {% endfor %}
+        <div style="display:flex;justify-content:space-between;align-items:center;
+             padding:9px 0;font-size:13px;">
+          <span style="color:#374151;">Feedback Samples</span>
+          <span style="background:#dbeafe;color:#1e3a8a;padding:2px 10px;
+               border-radius:20px;font-size:11px;font-weight:700;">
+            {{ feedback_count }}
+          </span>
+        </div>
+        <div style="margin-top:14px;padding-top:14px;border-top:1px solid #f3f4f6;">
+          <a href="{{ url_for('admin.metrics') }}" class="btn btn-secondary"
+             style="width:100%;justify-content:center;">
+            📈 Model Metrics & Retrain
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top Risky Senders -->
+    {% if top_senders %}
+    <div class="card">
+      <div class="card-header">🚨 Top Risky Senders</div>
+      <table class="data-table">
+        <thead>
+          <tr><th>Sender</th><th>Rate</th><th>Badge</th></tr>
+        </thead>
+        <tbody>
+          {% for s in top_senders %}
+          <tr>
+            <td style="font-size:12px;">{{ s.sender_email[:28] }}</td>
+            <td style="font-weight:700;color:#dc2626;">
+              {{ (s.phishing_rate*100)|round(1) }}%
+            </td>
+            <td>
+              <span class="rep-badge rep-{{ s.rep_badge }}">
+                {{ s.rep_badge|upper }}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <!-- Recent Processing -->
+    <div class="card">
+      <div class="card-header">⚡ Recent Processing</div>
+      <table class="data-table">
+        <thead>
+          <tr><th>ID</th><th>Status</th><th>Time</th></tr>
+        </thead>
+        <tbody>
+          {% for m in recent_monitoring %}
+          <tr>
+            <td style="font-weight:600;">#{{ m.email_id }}</td>
+            <td>
+              <span class="status-badge status-{{ m.monitoring_status }}">
+                {{ m.monitoring_status }}
+              </span>
+            </td>
+            <td style="font-size:12px;color:#9ca3af;">
+              {{ m.start_time.strftime('%H:%M:%S') }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <!-- Fix Stuck Button -->
+      <div style="padding:12px;border-top:1px solid #f3f4f6;">
+        <a href="{{ url_for('admin.fix_stuck') }}"
+           class="btn btn-warning btn-sm"
+           onclick="return confirm('Fix stuck emails?')">
+          🔧 Fix Stuck Emails
+        </a>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// Chart
+new Chart(document.getElementById('scoreChart').getContext('2d'), {
+  type: 'bar',
+  data: {
+    labels: ['0-9','10-19','20-29','30-39','40-49',
+             '50-59','60-69','70-79','80-89','90-100'],
+    datasets:[{
+      label:'Emails',
+      data: {{ score_buckets|tojson }},
+      backgroundColor:[
+        '#22c55e','#22c55e','#22c55e','#22c55e',
+        '#f59e0b','#f59e0b','#f59e0b',
+        '#ef4444','#ef4444','#ef4444'
+      ],
+      borderRadius:5,
+    }]
+  },
+  options:{
+    responsive:true,
+    plugins:{ legend:{ display:false } },
+    scales:{
+      y:{ beginAtZero:true, ticks:{ precision:0 },
+          grid:{ color:'#f3f4f6' } },
+      x:{ grid:{ display:false } }
+    }
+  }
+});
+
+// Threshold
+function updateThreshold(val) {
+  document.getElementById('threshold-label').textContent = val;
+  clearTimeout(window._pt);
+  window._pt = setTimeout(() => {
+    fetch(`{{ url_for('admin.threshold_preview') }}?threshold=${val}`)
+      .then(r => r.json())
+      .then(d => {
+        document.getElementById('preview-text').textContent =
+          `At threshold ${val}: ${d.count} email(s) from last 7 days would be quarantined.`;
+      });
+  }, 400);
+}
+updateThreshold({{ threshold }});
+
+// Auto-refresh every 15 seconds
+setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

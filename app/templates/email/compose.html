@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}
+  {% if prefill.get('subject','').startswith('Re:') %}Reply
+  {% elif prefill.get('subject','').startswith('Fwd:') %}Forward
+  {% elif prefill.get('draft_id') %}Edit Draft
+  {% else %}Compose{% endif %} — PhishGuard
+{% endblock %}
+{% block content %}
+
+<div class="page-header" style="margin-bottom:20px;">
+  <h1 class="page-title">
+    {% if prefill.get('subject','').startswith('Re:') %}↩️ Reply
+    {% elif prefill.get('subject','').startswith('Fwd:') %}↪️ Forward
+    {% elif prefill.get('draft_id') %}📝 Edit Draft
+    {% else %}✏️ New Email{% endif %}
+  </h1>
+</div>
+
+<div class="card" style="max-width:800px;">
+
+  <!-- SEND FORM -->
+  <form method="POST" action="{{ url_for('email.compose') }}" id="send-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action"   value="send">
+    <input type="hidden" name="draft_id" value="{{ prefill.get('draft_id', '') }}" id="draft-id-field">
+
+    <div style="padding:20px;border-bottom:1px solid #f3f4f6;">
+
+      <!-- To -->
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 0;
+                  border-bottom:1px solid #f3f4f6;">
+        <label style="font-size:13px;font-weight:700;color:#9ca3af;
+                       width:60px;flex-shrink:0;">To</label>
+        <input type="email" name="to" id="to-field"
+               value="{{ prefill.get('to','') }}"
+               placeholder="recipient@example.com" required
+               style="flex:1;border:none;outline:none;font-size:14px;
+                      background:transparent;color:#111827;">
+      </div>
+
+      <!-- Subject -->
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 0;
+                  border-bottom:1px solid #f3f4f6;">
+        <label style="font-size:13px;font-weight:700;color:#9ca3af;
+                       width:60px;flex-shrink:0;">Subject</label>
+        <input type="text" name="subject" id="subject-field"
+               value="{{ prefill.get('subject','') }}"
+               placeholder="Email subject"
+               style="flex:1;border:none;outline:none;font-size:14px;
+                      background:transparent;color:#111827;">
+      </div>
+
+      <!-- Body -->
+      <div style="padding:16px 0;">
+        <textarea name="body" id="body-field" rows="16"
+                  placeholder="Write your message here..."
+                  style="width:100%;border:none;outline:none;
+                         font-size:14px;line-height:1.8;resize:vertical;
+                         font-family:inherit;color:#374151;
+                         background:transparent;">{{ prefill.get('body','') }}</textarea>
+      </div>
+    </div>
+
+    <!-- Buttons -->
+    <div style="padding:14px 20px;display:flex;gap:10px;align-items:center;
+                background:#f9fafb;border-radius:0 0 10px 10px;flex-wrap:wrap;">
+
+      <!-- Send — regular submit, no JS needed -->
+      <button class="btn btn-primary" type="submit">
+        📤 Send
+      </button>
+
+      <!-- Save Draft — separate button -->
+      <button class="btn btn-secondary" type="button" id="save-draft-btn">
+        💾 Save Draft
+      </button>
+
+      <!-- Discard -->
+      <a href="{{ url_for('email.inbox') }}" class="btn btn-ghost" id="discard-btn">
+        🗑️ Discard
+      </a>
+
+      <span id="autosave-msg"
+            style="font-size:12px;color:#9ca3af;margin-left:auto;
+                   font-style:italic;"></span>
+    </div>
+  </form>
+
+  <!-- SEPARATE DRAFT FORM (avoids CSRF conflict) -->
+  <form method="POST" action="{{ url_for('email.compose') }}"
+        id="draft-form" style="display:none;">
+    <input type="hidden" name="csrf_token"  value="{{ csrf_token() }}">
+    <input type="hidden" name="action"      value="save_draft">
+    <input type="hidden" name="draft_id"    value="{{ prefill.get('draft_id', '') }}" id="draft-form-id">
+    <input type="hidden" name="to"          id="draft-to">
+    <input type="hidden" name="subject"     id="draft-subject">
+    <input type="hidden" name="body"        id="draft-body">
+  </form>
+</div>
+
+<script>
+let currentDraftId   = {{ prefill.get('draft_id', 'null') }};
+let hasUnsavedChange = false;
+let autoSaveTimer    = null;
+
+function showMsg(txt, color) {
+  const el = document.getElementById('autosave-msg');
+  if (el) { el.textContent = txt; el.style.color = color || '#9ca3af'; }
+}
+
+function syncDraftForm() {
+  document.getElementById('draft-to').value      = document.getElementById('to-field').value || '';
+  document.getElementById('draft-subject').value = document.getElementById('subject-field').value || '';
+  document.getElementById('draft-body').value    = document.getElementById('body-field').value || '';
+  if (currentDraftId) {
+    document.getElementById('draft-form-id').value = currentDraftId;
+    document.getElementById('draft-id-field').value = currentDraftId;
+  }
+}
+
+async function saveDraftAjax(silent) {
+  syncDraftForm();
+  const fd = new FormData(document.getElementById('draft-form'));
+  try {
+    const resp = await fetch('{{ url_for("email.compose") }}', {
+      method:  'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body:    fd,
+    });
+    const data = await resp.json();
+    if (data.draft_id) {
+      currentDraftId = data.draft_id;
+      document.getElementById('draft-form-id').value  = currentDraftId;
+      document.getElementById('draft-id-field').value = currentDraftId;
+    }
+    hasUnsavedChange = false;
+    if (!silent) {
+      showMsg('Draft saved ' + new Date().toLocaleTimeString(), '#22c55e');
+      setTimeout(() => showMsg(''), 3000);
+    }
+  } catch(e) {
+    if (!silent) showMsg('Save failed', '#dc2626');
+  }
+}
+
+// Track changes for auto-save
+['to-field','subject-field','body-field'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', () => {
+    hasUnsavedChange = true;
+    showMsg('Unsaved changes...', '#f59e0b');
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => saveDraftAjax(false), 30000);
+  });
+});
+
+// Save Draft button
+document.getElementById('save-draft-btn')?.addEventListener('click', async () => {
+  showMsg('Saving...', '#9ca3af');
+  await saveDraftAjax(false);
+  setTimeout(() => {
+    window.location.href = '{{ url_for("email.inbox", folder="draft") }}';
+  }, 600);
+});
+
+// Discard
+document.getElementById('discard-btn')?.addEventListener('click', e => {
+  if (hasUnsavedChange) {
+    if (!confirm('Discard this email without saving?')) {
+      e.preventDefault();
+    } else {
+      hasUnsavedChange = false;
+    }
+  }
+});
+
+// Auto-save on navigate away (if unsaved changes)
+window.addEventListener('beforeunload', e => {
+  // Don't show dialog when sending (form submit)
+  if (hasUnsavedChange) {
+    saveDraftAjax(true);
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+// When send form submits — clear unsaved flag so beforeunload doesn't fire
+document.getElementById('send-form')?.addEventListener('submit', () => {
+  hasUnsavedChange = false;
+  clearTimeout(autoSaveTimer);
+});
+</script>
+
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Model Metrics — PhishGuard{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <h1 class="page-title">📈 Model Metrics</h1>
+  <form method="POST" action="{{ url_for('admin.retrain') }}" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-primary" type="submit"
+            onclick="return confirm('Start model retraining?')">
+      🔄 Retrain Model
+    </button>
+  </form>
+</div>
+
+{% if total == 0 %}
+<div class="empty-state">
+  <div class="empty-icon">📊</div>
+  <p>No feedback data yet. Ask users to mark emails as Safe or Phishing.</p>
+</div>
+{% else %}
+<p class="text-muted" style="margin-bottom:20px;">Computed from {{ total }} user feedback samples.</p>
+
+<div class="metrics-grid">
+  <div class="metric-card">
+    <div class="metric-label">Precision</div>
+    <div class="metric-value">{{ metrics.precision }}%</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Recall</div>
+    <div class="metric-value">{{ metrics.recall }}%</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">F1 Score</div>
+    <div class="metric-value">{{ metrics.f1 }}%</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Accuracy</div>
+    <div class="metric-value">{{ metrics.accuracy }}%</div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

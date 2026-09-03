@@ -1,0 +1,448 @@
+{% extends "base.html" %}
+{% block title %}{{ folder|capitalize }} — PhishGuard{% endblock %}
+{% block content %}
+
+<div class="page-header" style="margin-bottom:16px;">
+  <h1 class="page-title">
+    {% if folder=='inbox' %}📥 Inbox
+    {% elif folder=='starred' %}⭐ Starred
+    {% elif folder=='sent' %}📤 Sent
+    {% elif folder=='draft' %}📝 Drafts
+    {% elif folder=='archive' %}🗄️ Archive
+    {% elif folder=='spam' %}⚠️ Spam
+    {% elif folder=='quarantine' %}🔒 Quarantine
+    {% elif folder=='trash' %}🗑️ Trash
+    {% else %}{{ folder|capitalize }}{% endif %}
+  </h1>
+  <div style="display:flex;gap:8px;">
+    <a href="{{ url_for('email.refresh') }}" class="btn btn-secondary">🔄 Refresh</a>
+    <a href="{{ url_for('email.compose') }}" class="btn btn-primary">✏️ Compose</a>
+  </div>
+</div>
+
+<!-- Search -->
+<form method="GET" action="{{ url_for('email.inbox') }}" class="search-bar">
+  <input type="hidden" name="folder" value="{{ folder }}">
+  <input type="search" name="q" value="{{ search }}"
+         placeholder="Search by sender, subject, or keyword..."
+         class="form-input search-input">
+  <button class="btn btn-secondary" type="submit">Search</button>
+  {% if search %}
+  <a href="{{ url_for('email.inbox', folder=folder) }}" class="btn btn-ghost">Clear</a>
+  {% endif %}
+</form>
+
+<!-- Folder Tabs -->
+<div class="folder-tabs" style="overflow-x:auto;white-space:nowrap;">
+  <a href="{{ url_for('email.inbox', folder='inbox') }}"
+     class="tab {% if folder=='inbox' %}active{% endif %}">
+    📥 Inbox <span class="tab-count">{{ counts.inbox }}</span>
+  </a>
+  <a href="{{ url_for('email.inbox', folder='starred') }}"
+     class="tab {% if folder=='starred' %}active{% endif %}">
+    ⭐ Starred <span class="tab-count">{{ counts.starred }}</span>
+  </a>
+  <a href="{{ url_for('email.inbox', folder='sent') }}"
+     class="tab {% if folder=='sent' %}active{% endif %}">📤 Sent</a>
+  <a href="{{ url_for('email.inbox', folder='draft') }}"
+     class="tab {% if folder=='draft' %}active{% endif %}">
+    📝 Drafts <span class="tab-count">{{ counts.draft }}</span>
+  </a>
+  <a href="{{ url_for('email.inbox', folder='archive') }}"
+     class="tab {% if folder=='archive' %}active{% endif %}">🗄️ Archive</a>
+  <a href="{{ url_for('email.inbox', folder='spam') }}"
+     class="tab {% if folder=='spam' %}active{% endif %}">
+    ⚠️ Spam <span class="tab-count">{{ counts.spam }}</span>
+  </a>
+  <a href="{{ url_for('quarantine.index') }}" class="tab">
+    🔒 Quarantine <span class="tab-count">{{ counts.quarantine }}</span>
+  </a>
+  <a href="{{ url_for('email.inbox', folder='trash') }}"
+     class="tab {% if folder=='trash' %}active{% endif %}">
+    🗑️ Trash <span class="tab-count">{{ counts.trash }}</span>
+  </a>
+</div>
+
+{% if folder=='trash' %}
+<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;
+            padding:10px 16px;margin-bottom:12px;font-size:13px;color:#856404;">
+  ⚠️ Emails in Trash are permanently deleted after 30 days.
+</div>
+{% endif %}
+
+{% if emails.items %}
+
+<!-- Bulk Action Toolbar -->
+<form id="bulk-form" method="POST" action="{{ url_for('email.bulk_action') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="folder"     value="{{ folder }}">
+  <input type="hidden" name="action"     value="" id="bulk-action-val">
+
+  <!-- Toolbar (hidden until emails selected) -->
+  <div id="bulk-toolbar" style="
+    display:none;
+    align-items:center;
+    gap:8px;
+    padding:10px 14px;
+    background:#eff6ff;
+    border:1px solid #bfdbfe;
+    border-radius:8px;
+    margin-bottom:8px;
+    flex-wrap:wrap;
+  ">
+    <span id="selected-count" style="font-size:13px;font-weight:700;color:#1e40af;
+          margin-right:4px;">0 selected</span>
+
+    {% if folder != 'trash' %}
+    <button type="button" class="btn btn-sm btn-danger" onclick="bulkAction('delete')">
+      🗑️ Delete
+    </button>
+    {% endif %}
+
+    {% if folder == 'trash' %}
+    <button type="button" class="btn btn-sm btn-secondary" onclick="bulkAction('restore')">
+      ↩️ Restore
+    </button>
+    <button type="button" class="btn btn-sm btn-danger"
+            style="background:#7f1d1d;"
+            onclick="bulkAction('delete_permanent')">
+      ⛔ Delete Forever
+    </button>
+    {% endif %}
+
+    {% if folder not in ['archive','trash','sent','draft'] %}
+    <button type="button" class="btn btn-sm btn-secondary" onclick="bulkAction('archive')">
+      🗄️ Archive
+    </button>
+    {% endif %}
+
+    {% if folder == 'inbox' %}
+    <button type="button" class="btn btn-sm btn-secondary" onclick="bulkAction('mark_read')">
+      ✉️ Mark Read
+    </button>
+    <button type="button" class="btn btn-sm btn-secondary" onclick="bulkAction('mark_unread')">
+      📧 Mark Unread
+    </button>
+    {% endif %}
+
+    <button type="button" class="btn btn-sm btn-ghost" onclick="clearSelection()">
+      ✕ Cancel
+    </button>
+  </div>
+
+  <!-- Email List -->
+  <div class="email-list" id="email-list">
+
+    <!-- Select All Row -->
+    <div class="email-row-wrap" style="background:#f9fafb;border-bottom:2px solid #e5e7eb;">
+      <label style="display:flex;align-items:center;padding:8px 12px;cursor:pointer;gap:8px;">
+        <input type="checkbox" id="select-all" style="width:16px;height:16px;cursor:pointer;">
+        <span style="font-size:12px;color:#6b7280;font-weight:600;">Select all</span>
+      </label>
+    </div>
+
+    {% for em in emails.items %}
+    {% set clf = em.classification %}
+    {% if clf %}
+      {% if clf.label=='phishing'   %} {% set lt='PHISHING'  %} {% set lc='inbox-label-phishing'   %} {% set rc='row-phishing'   %}
+      {% elif clf.label=='suspicious' %} {% set lt='SUSPICIOUS'%} {% set lc='inbox-label-suspicious' %} {% set rc='row-suspicious' %}
+      {% else %}                         {% set lt='SAFE'      %} {% set lc='inbox-label-safe'       %} {% set rc=''              %}
+      {% endif %}
+    {% else %}
+      {% if em.email_direction=='sent' %} {% set lt='SENT'    %} {% set lc='inbox-label-sent'    %} {% set rc='' %}
+      {% else %}                          {% set lt='CHECKING' %} {% set lc='inbox-label-checking'%} {% set rc='' %}
+      {% endif %}
+    {% endif %}
+
+    <div class="email-row-wrap {{ rc }} {% if not em.is_read and em.email_direction!='sent' %}unread{% endif %}"
+         data-id="{{ em.email_id }}">
+
+      <!-- Checkbox -->
+      <label class="checkbox-wrap" title="Select">
+        <input type="checkbox" name="email_ids" value="{{ em.email_id }}"
+               class="email-checkbox"
+               style="width:16px;height:16px;cursor:pointer;margin:0 4px 0 12px;">
+      </label>
+
+      <!-- Star -->
+      <form method="POST" action="{{ url_for('email.toggle_star', email_id=em.email_id) }}"
+            style="display:flex;align-items:center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="star-btn" title="{{ 'Unstar' if em.is_starred else 'Star' }}">
+          {{ '⭐' if em.is_starred else '☆' }}
+        </button>
+      </form>
+
+      <!-- Email row -->
+      <a href="{% if folder=='draft' %}{{ url_for('email.compose', draft_id=em.email_id) }}{% else %}{{ url_for('email.view', email_id=em.email_id) }}{% endif %}"
+         class="email-row-inner">
+        <div class="email-sender">{{ em.sender_email[:28] }}</div>
+        <div class="email-subject">
+          {% if not em.is_read and em.email_direction=='received' %}
+          <span class="unread-dot"></span>{% endif %}
+          {{ em.subject[:65] if em.subject else '(No Subject)' }}
+          {% if em.has_attachments %}<span style="font-size:12px;margin-left:4px;">📎</span>{% endif %}
+          {% if folder=='draft' %}<span style="color:#f59e0b;font-size:11px;"> [Draft]</span>{% endif %}
+        </div>
+        <div class="email-meta">
+          {% if folder not in ['sent','draft'] %}
+          <span class="inbox-label {{ lc }}">{{ lt }}</span>
+          {% if clf and clf.risk_score and clf.label != 'safe' %}
+          <span class="risk-badge-sm
+            {% if clf.risk_score>=70 %}risk-high{% elif clf.risk_score>=40 %}risk-medium{% else %}risk-low{% endif %}">
+            {{ clf.risk_score|round|int }}</span>
+          {% endif %}
+          {% endif %}
+          <span class="email-time local-time"
+                data-utc="{{ em.received_time.strftime('%Y-%m-%dT%H:%M:%SZ') if em.received_time else '' }}">
+            {{ em.received_time.strftime('%b %d') if em.received_time else '' }}
+          </span>
+        </div>
+      </a>
+
+      <!-- Quick actions on hover -->
+      <div class="email-quick-actions">
+        {% if folder == 'trash' %}
+        <form method="POST" action="{{ url_for('email.restore', email_id=em.email_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="quick-btn" type="submit" title="Restore">↩️</button>
+        </form>
+        <form method="POST" action="{{ url_for('email.delete_permanent', email_id=em.email_id) }}"
+              onsubmit="return confirm('Permanently delete this email? This cannot be undone!')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="quick-btn quick-btn-danger" type="submit" title="Delete forever">🗑️</button>
+        </form>
+        {% elif folder == 'draft' %}
+        <a href="{{ url_for('email.compose', draft_id=em.email_id) }}" class="quick-btn" title="Edit">✏️</a>
+        <form method="POST" action="{{ url_for('email.delete_email', email_id=em.email_id) }}"
+              onsubmit="return confirm('Delete this draft?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="quick-btn quick-btn-danger" type="submit">🗑️</button>
+        </form>
+        {% else %}
+        <a href="{{ url_for('email.reply', email_id=em.email_id) }}" class="quick-btn" title="Reply">↩️</a>
+        <form method="POST" action="{{ url_for('email.archive', email_id=em.email_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="quick-btn" type="submit" title="Archive">🗄️</button>
+        </form>
+        <form method="POST" action="{{ url_for('email.delete_email', email_id=em.email_id) }}"
+              onsubmit="return confirm('Move this email to Trash?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="quick-btn quick-btn-danger" type="submit" title="Delete">🗑️</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+
+  </div>
+</form>
+
+{% if emails.pages > 1 %}
+<div class="pagination">
+  {% if emails.has_prev %}
+  <a href="{{ url_for('email.inbox', folder=folder, page=emails.prev_num, q=search) }}"
+     class="btn btn-ghost">← Prev</a>
+  {% endif %}
+  <span class="page-info">Page {{ emails.page }} of {{ emails.pages }}</span>
+  {% if emails.has_next %}
+  <a href="{{ url_for('email.inbox', folder=folder, page=emails.next_num, q=search) }}"
+     class="btn btn-ghost">Next →</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+  <div class="empty-icon">
+    {% if folder=='trash' %}🗑️{% elif folder=='starred' %}⭐{% elif folder=='draft' %}📝{% else %}📭{% endif %}
+  </div>
+  <p>{% if search %}No results for "<strong>{{ search }}</strong>"{% else %}No emails in {{ folder }}.{% endif %}</p>
+</div>
+{% endif %}
+
+<style>
+/* Checkbox wrap */
+.checkbox-wrap {
+  display:flex; align-items:center; cursor:pointer; flex-shrink:0;
+}
+.email-checkbox { accent-color:#1d4ed8; }
+
+/* Email row */
+.email-row-wrap {
+  display:flex; align-items:center; border-bottom:1px solid #f3f4f6;
+  transition:background .12s; position:relative;
+}
+.email-row-wrap:hover { background:#f9fafb; }
+.email-row-wrap:hover .email-quick-actions { opacity:1; }
+.email-row-wrap.selected { background:#eff6ff!important; }
+.email-row-wrap.unread .email-subject { font-weight:700; color:#111827; }
+.row-phishing   { background:#fff5f5!important; border-left:3px solid #dc2626; }
+.row-suspicious { background:#fffbeb!important; border-left:3px solid #f59e0b; }
+.row-phishing.selected   { background:#fee2e2!important; }
+.row-suspicious.selected { background:#fef3c7!important; }
+
+/* Star */
+.star-btn {
+  background:none; border:none; cursor:pointer;
+  padding:8px 4px; font-size:16px; opacity:.5;
+  transition:opacity .15s; flex-shrink:0;
+}
+.star-btn:hover { opacity:1; }
+
+/* Email row inner */
+.email-row-inner {
+  display:grid; grid-template-columns:180px 1fr 180px;
+  align-items:center; gap:12px; padding:12px 8px;
+  text-decoration:none; color:inherit; flex:1; min-width:0;
+}
+.email-sender  { font-size:13px; color:#374151; font-weight:500;
+  overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.email-subject { font-size:14px; color:#374151;
+  overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.email-meta    { display:flex; align-items:center; gap:6px; justify-content:flex-end; }
+.email-time    { font-size:12px; color:#9ca3af; white-space:nowrap; }
+.unread-dot    {
+  display:inline-block; width:6px; height:6px;
+  background:#1d4ed8; border-radius:50%;
+  margin-right:6px; vertical-align:middle;
+}
+
+/* Quick actions */
+.email-quick-actions {
+  display:flex; gap:4px; padding:0 10px;
+  opacity:0; transition:opacity .15s; flex-shrink:0;
+}
+.quick-btn {
+  background:none; border:1px solid #e5e7eb; cursor:pointer;
+  padding:4px 8px; border-radius:6px; font-size:14px;
+  text-decoration:none; color:inherit; transition:background .15s;
+}
+.quick-btn:hover         { background:#f3f4f6; }
+.quick-btn-danger:hover  { background:#fee2e2; border-color:#fecaca; }
+
+/* Labels */
+.inbox-label {
+  display:inline-block; padding:2px 8px; border-radius:20px;
+  font-size:10px; font-weight:700; letter-spacing:.04em; white-space:nowrap;
+}
+.inbox-label-phishing   { background:#fee2e2; color:#991b1b; }
+.inbox-label-suspicious { background:#fef3c7; color:#92400e; }
+.inbox-label-safe       { background:#dcfce7; color:#15803d; }
+.inbox-label-sent       { background:#dbeafe; color:#1e40af; }
+.inbox-label-checking   { background:#f3f4f6; color:#6b7280; }
+
+@media(max-width:700px) {
+  .email-row-inner { grid-template-columns:1fr 100px; }
+  .email-sender    { display:none; }
+}
+</style>
+
+<script>
+// ── Checkbox & Bulk Actions ───────────────────────────────────────────────────
+const selectAll  = document.getElementById('select-all');
+const toolbar    = document.getElementById('bulk-toolbar');
+const countLabel = document.getElementById('selected-count');
+
+function getChecked() {
+  return [...document.querySelectorAll('.email-checkbox:checked')];
+}
+
+function updateToolbar() {
+  const checked = getChecked();
+  const n       = checked.length;
+  if (n > 0) {
+    toolbar.style.display = 'flex';
+    countLabel.textContent = n + ' selected';
+  } else {
+    toolbar.style.display = 'none';
+  }
+  // Highlight selected rows
+  document.querySelectorAll('.email-row-wrap[data-id]').forEach(row => {
+    const cb = row.querySelector('.email-checkbox');
+    row.classList.toggle('selected', cb?.checked || false);
+  });
+  // Update select-all state
+  const allCbs = document.querySelectorAll('.email-checkbox');
+  if (selectAll) {
+    selectAll.indeterminate = n > 0 && n < allCbs.length;
+    selectAll.checked       = n === allCbs.length && allCbs.length > 0;
+  }
+}
+
+// Select all toggle
+selectAll?.addEventListener('change', () => {
+  document.querySelectorAll('.email-checkbox').forEach(cb => {
+    cb.checked = selectAll.checked;
+  });
+  updateToolbar();
+});
+
+// Individual checkbox
+document.querySelectorAll('.email-checkbox').forEach(cb => {
+  cb.addEventListener('change', updateToolbar);
+});
+
+function clearSelection() {
+  document.querySelectorAll('.email-checkbox').forEach(cb => cb.checked = false);
+  if (selectAll) selectAll.checked = false;
+  updateToolbar();
+}
+
+function bulkAction(action) {
+  const checked = getChecked();
+  if (checked.length === 0) {
+    alert('Please select at least one email.');
+    return;
+  }
+
+  // Confirmation messages
+  const msgs = {
+    delete:           `Move ${checked.length} email(s) to Trash?`,
+    delete_permanent: `Permanently delete ${checked.length} email(s)? This CANNOT be undone!`,
+    archive:          `Archive ${checked.length} email(s)?`,
+    restore:          `Restore ${checked.length} email(s) to Inbox?`,
+    mark_read:        `Mark ${checked.length} email(s) as read?`,
+    mark_unread:      `Mark ${checked.length} email(s) as unread?`,
+  };
+
+  if (!confirm(msgs[action] || `Perform ${action} on ${checked.length} email(s)?`)) return;
+
+  document.getElementById('bulk-action-val').value = action;
+  document.getElementById('bulk-form').submit();
+}
+
+// ── Local Time ────────────────────────────────────────────────────────────────
+document.querySelectorAll('.local-time[data-utc]').forEach(el => {
+  const utc = el.dataset.utc;
+  if (!utc) return;
+  try {
+    const d   = new Date(utc);
+    const now = new Date();
+    const diffDays = Math.floor((now - d) / 86400000);
+    if (diffDays === 0) {
+      el.textContent = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    } else if (diffDays < 7) {
+      el.textContent = d.toLocaleDateString([], {weekday:'short'});
+    } else {
+      el.textContent = d.toLocaleDateString([], {month:'short', day:'numeric'});
+    }
+    el.title = d.toLocaleString();
+  } catch(e) {}
+});
+
+// ── Real-time count check ─────────────────────────────────────────────────────
+let prevCounts = {inbox:{{ counts.inbox }},spam:{{ counts.spam }},quarantine:{{ counts.quarantine }}};
+function checkNew() {
+  fetch('/api/email/count')
+    .then(r => r.json())
+    .then(d => {
+      const cur = '{{ folder }}';
+      if ((d[cur] || 0) > (prevCounts[cur] || 0)) setTimeout(() => location.reload(), 800);
+      prevCounts = d;
+    }).catch(() => {});
+}
+setInterval(checkNew, 5000);
+</script>
+
+{% endblock %}

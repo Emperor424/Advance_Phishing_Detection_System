@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Users — PhishGuard{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">👥 User Management</h1>
+</div>
+<div class="card">
+  <table class="data-table">
+    <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.full_name }}</td>
+        <td class="text-muted">{{ u.email }}</td>
+        <td><span class="role-badge role-{{ u.role }}">{{ u.role|upper }}</span></td>
+        <td><span class="status-badge status-{{ u.account_status }}">{{ u.account_status }}</span></td>
+        <td class="text-muted text-sm">{{ u.last_login.strftime('%b %d %H:%M') if u.last_login else 'Never' }}</td>
+        <td>
+          {% if u.user_id != current_user.user_id %}
+          <form method="POST" action="{{ url_for('admin.toggle_user', user_id=u.user_id) }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm {{ 'btn-success' if u.account_status == 'banned' else 'btn-warning' }}" type="submit">
+              {{ 'Unban' if u.account_status == 'banned' else 'Ban' }}
+            </button>
+          </form>
+          {% else %}
+          <span class="text-muted text-sm">You</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

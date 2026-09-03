@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Audit Log — PhishGuard{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">📋 Audit Log</h1>
+</div>
+<div class="card">
+  <table class="data-table">
+    <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th><th>IP</th></tr></thead>
+    <tbody>
+      {% for log in logs.items %}
+      <tr>
+        <td class="text-sm text-muted">{{ log.logged_at.strftime('%b %d %H:%M:%S') }}</td>
+        <td class="text-sm">{{ log.actor.email if log.actor else 'System' }}</td>
+        <td><span class="action-badge">{{ log.action_type }}</span></td>
+        <td class="text-sm text-muted" style="max-width:300px;">{{ log.detail or '—' }}</td>
+        <td class="text-sm text-muted">{{ log.ip_address or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if logs.pages > 1 %}
+<div class="pagination">
+  {% if logs.has_prev %}<a href="{{ url_for('admin.audit_log', page=logs.prev_num) }}" class="btn btn-ghost">← Prev</a>{% endif %}
+  <span class="page-info">Page {{ logs.page }} of {{ logs.pages }}</span>
+  {% if logs.has_next %}<a href="{{ url_for('admin.audit_log', page=logs.next_num) }}" class="btn btn-ghost">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
