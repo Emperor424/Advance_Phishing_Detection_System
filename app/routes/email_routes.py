@@ -41,6 +41,7 @@ def _base_query():
     return Email.query.filter(
         db.or_(
             Email.user_id == uid,
+            Email.user_id == None,
             _email_matches(Email.sender_email,   email),
             _email_matches(Email.receiver_email, email),
         )
@@ -68,6 +69,7 @@ def _inbox_query():
         Email.folder_status == "inbox",
         db.or_(
             Email.user_id == uid,
+            Email.user_id == None,
             _email_matches(Email.receiver_email, email),
         )
     )
@@ -518,6 +520,7 @@ def _get_email(email_id):
         Email.email_id == email_id,
         db.or_(
             Email.user_id == current_user.user_id,
+            Email.user_id == None,
             _email_matches(Email.sender_email,   email),
             _email_matches(Email.receiver_email, email),
         )

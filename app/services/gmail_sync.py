@@ -169,7 +169,7 @@ def _save_email(msg, imap_email, folder, direction, db):
         sent_time = datetime.utcnow()
 
     record = Email(
-        user_id         = 1,    # IMAP emails belong to admin
+        user_id         = None,    # # Shared — all users can see
         sender_email    = sender[:255],
         receiver_email  = receiver[:255],
         subject         = subject[:500],

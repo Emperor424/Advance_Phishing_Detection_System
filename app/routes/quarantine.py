@@ -31,6 +31,7 @@ def index():
             Email.folder_status == "quarantine",
             db.or_(
                 Email.user_id == uid,
+                Email.user_id == None,
                 _exact_match(Email.receiver_email, email),
             )
         ).order_by(Email.received_time.desc()).all()
