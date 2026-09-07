@@ -200,15 +200,20 @@ def audit_log():
 @login_required
 @admin_required
 def metrics():
-    feedbacks = FeedbackLabel.query.all()
-    total     = len(feedbacks)
-    if total == 0:
-        return render_template("admin/metrics.html", metrics={}, total=0)
+    feedbacks = FeedbackLabel.query.order_by(FeedbackLabel.submitted_at.desc()).all()
 
-    tp = sum(1 for f in feedbacks if f.user_label == "phishing" and f.original_label == "phishing")
-    fp = sum(1 for f in feedbacks if f.user_label == "safe"     and f.original_label == "phishing")
-    fn = sum(1 for f in feedbacks if f.user_label == "phishing" and f.original_label == "safe")
-    tn = sum(1 for f in feedbacks if f.user_label == "safe"     and f.original_label == "safe")
+    # Only feedback tied to an email that was actually classified counts
+    # toward the metrics — feedback on an unclassified/"unknown" email
+    # (e.g. a manually composed test email) doesn't measure the classifier.
+    scored = [f for f in feedbacks if f.original_label in ("phishing", "suspicious", "safe")]
+    total  = len(scored)
+    if total == 0:
+        return render_template("admin/metrics.html", metrics={}, total=0, feedbacks=feedbacks)
+
+    tp = sum(1 for f in scored if f.user_label == "phishing" and f.original_label in ("phishing", "suspicious"))
+    fp = sum(1 for f in scored if f.user_label == "safe"     and f.original_label in ("phishing", "suspicious"))
+    fn = sum(1 for f in scored if f.user_label == "phishing" and f.original_label == "safe")
+    tn = sum(1 for f in scored if f.user_label == "safe"     and f.original_label == "safe")
 
     precision = round(tp / max(tp + fp, 1) * 100, 1)
     recall    = round(tp / max(tp + fn, 1) * 100, 1)
@@ -223,7 +228,8 @@ def metrics():
             "f1":        f1,
             "accuracy":  accuracy,
         },
-        total = total,
+        total     = total,
+        feedbacks = feedbacks,
     )
 
 

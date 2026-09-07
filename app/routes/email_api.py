@@ -26,7 +26,6 @@ def email_count():
         base  = Email.query.filter(
             db.or_(
                 Email.user_id == uid,
-                Email.user_id == None,
                 _exact_match(Email.sender_email,   email),
                 _exact_match(Email.receiver_email, email),
             )
@@ -42,7 +41,6 @@ def email_count():
             Email.folder_status == "inbox",
             db.or_(
                 Email.user_id == uid,
-                Email.user_id == None,
                 _exact_match(Email.receiver_email, email),
             )
         )

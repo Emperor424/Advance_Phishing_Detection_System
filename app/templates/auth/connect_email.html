@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Connect Your Email — PhishGuard{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <h1 class="page-title">📧 Connect Your Email</h1>
+</div>
+
+<div class="card" style="max-width:560px;">
+  <div class="card-header">Gmail Account</div>
+  <div style="padding:20px;">
+
+    {% if current_user.has_gmail_connected %}
+      <p class="text-sm" style="margin-bottom:16px;">
+        ✅ Connected: <strong>{{ current_user.gmail_email }}</strong><br>
+        New mail from this inbox will be analysed and shown here automatically.
+      </p>
+      <form method="POST" action="{{ url_for('auth.disconnect_email') }}"
+            onsubmit="return confirm('Disconnect this Gmail account? PhishGuard will stop checking it.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-secondary" type="submit">Disconnect</button>
+      </form>
+    {% else %}
+      <p class="text-sm text-muted" style="margin-bottom:16px;">
+        Connect your own Gmail account so PhishGuard can check your real inbox
+        and explain why each email is safe, spam, or phishing. This does <strong>not</strong>
+        use your normal Gmail password — Google gives you a separate 16-character
+        code called an <strong>App Password</strong> just for this.
+      </p>
+
+      <ol class="text-sm" style="margin-bottom:20px; padding-left:20px;">
+        <li>Go to your Google Account → Security → turn on <strong>2-Step Verification</strong> (if not already on)</li>
+        <li>Search Google Account settings for <strong>App Passwords</strong></li>
+        <li>Create a new one (name it "PhishGuard"), and copy the 16-character code it gives you</li>
+        <li>Paste your Gmail address and that code below</li>
+      </ol>
+
+      <form method="POST" action="{{ url_for('auth.connect_email') }}" novalidate>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+          <label class="form-label" for="gmail_email">Your Gmail address</label>
+          <input class="form-input" type="email" id="gmail_email" name="gmail_email"
+                 placeholder="you@gmail.com" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="gmail_app_password">App Password</label>
+          <input class="form-input" type="text" id="gmail_app_password" name="gmail_app_password"
+                 placeholder="16-character code from Google" required>
+        </div>
+        <button class="btn btn-primary" type="submit">Connect</button>
+      </form>
+    {% endif %}
+
+  </div>
+</div>
+
+{% endblock %}

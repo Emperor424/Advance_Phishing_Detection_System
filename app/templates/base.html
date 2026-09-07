@@ -98,6 +98,11 @@
       </a>
 
       <div class="nav-section-label" style="margin-top:12px;">Other</div>
+      <a href="{{ url_for('auth.connect_email') }}"
+         class="nav-item {% if request.endpoint == 'auth.connect_email' %}active{% endif %}">
+        <span class="nav-icon">📧</span> Connect Email
+        {% if not current_user.has_gmail_connected %}<span class="sb-badge sb-badge-danger">!</span>{% endif %}
+      </a>
       <a href="{{ url_for('email.inbox', folder='trash') }}"
          class="nav-item {% if request.args.get('folder') == 'trash' %}active{% endif %}">
         <span class="nav-icon">🗑️</span> Trash

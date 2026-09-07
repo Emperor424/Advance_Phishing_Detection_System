@@ -21,6 +21,8 @@ class User(UserMixin, db.Model):
     failed_attempts  = db.Column(db.Integer, default=0)
     locked_until     = db.Column(db.DateTime, nullable=True)
     digest_frequency = db.Column(db.String(50), default="daily")
+    gmail_email          = db.Column(db.String(255), nullable=True)
+    gmail_app_password   = db.Column(db.String(255), nullable=True)
 
     # Flask-Login requires get_id() to return a string
     def get_id(self):
@@ -74,6 +76,10 @@ class User(UserMixin, db.Model):
     @property
     def is_active(self) -> bool:  # Flask-Login uses this
         return self.account_status == "active"
+
+    @property
+    def has_gmail_connected(self) -> bool:
+        return bool(self.gmail_email and self.gmail_app_password)
 
     def __repr__(self):
         return f"<User {self.email} [{self.role}]>"

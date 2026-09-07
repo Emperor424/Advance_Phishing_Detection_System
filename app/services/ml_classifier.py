@@ -119,40 +119,43 @@ def _rule_based_score(features, nlp, links, header) -> float:
 
 def _apply_hard_rules(score, nlp, links, header) -> float:
     """
-    Hard rules for obvious phishing indicators.
-    These override the ML score for clear-cut cases.
+    Hard rules for phishing indicators.
+    A single weak/moderate signal pushes into the SUSPICIOUS (spam) band;
+    only a confirmed-malicious link or a combination of strong signals
+    pushes into the PHISHING (quarantine) band.
     """
-    # Suspicious TLD in any link → minimum 55
     for link in links:
         if link.get("suspicious_tld"):
-            score = max(score, 55.0)
+            score = max(score, 45.0)
         if link.get("homoglyph_flag"):
-            score = max(score, 70.0)
-        if link.get("reputation") == "suspicious":
             score = max(score, 55.0)
+        if link.get("reputation") == "suspicious":
+            score = max(score, 45.0)
+        if link.get("reputation") == "malicious":
+            score = max(score, 75.0)   # confirmed malicious -> quarantine
 
-    # Brand impersonation → minimum 60
+    # Brand impersonation alone -> moderate risk (spam-band)
     if nlp.get("impersonation_score", 0) > 25:
-        score = max(score, 60.0)
+        score = max(score, 45.0)
 
-    # High urgency + impersonation → minimum 70
+    # High urgency + impersonation together -> strong combined signal -> quarantine
     if nlp.get("urgency_score", 0) > 40 and nlp.get("impersonation_score", 0) > 20:
-        score = max(score, 70.0)
-
-    # Spoofed sender → minimum 65
-    if header.get("spoofing_flag"):
         score = max(score, 65.0)
 
-    # Suspicious keywords in body → boost
+    # Spoofed sender alone -> moderate risk (spam-band)
+    if header.get("spoofing_flag"):
+        score = max(score, 50.0)
+
+    # Suspicious keywords in body -> moderate risk (spam-band)
     kws = nlp.get("suspicious_keywords", "")
     if "suspicious_domain" in kws:
-        score = max(score, 65.0)
+        score = max(score, 50.0)
 
-    # Multiple urgent keywords → boost
+    # Multiple urgent keywords -> boost
     if nlp.get("urgency_score", 0) > 60:
         score = min(100.0, score + 15)
 
-    # High text risk → boost
+    # High text risk -> boost
     if nlp.get("text_risk_score", 0) > 60:
         score = min(100.0, score + 10)
 
