@@ -19,35 +19,79 @@ def fetch_and_process_emails(app):
     """
     Scheduled job: connect to IMAP, fetch new emails, run analysis pipeline.
     Runs within the given Flask app context.
+    Checks BOTH the one shared/admin inbox (from .env, if configured) AND
+    every individual user's own connected Gmail account (via their own
+    App Password) — so each user's real inbox is analysed separately.
     Uses PEEK so emails stay unread in Gmail — visible in both Gmail and PhishGuard.
     """
     with app.app_context():
         from app import db
         from app.models.email_model import Email, EmailMonitoring
         from app.models.quarantine import SystemConfig
+        from app.models.user import User
 
-        cfg        = current_app.config
+        cfg       = current_app.config
+        total_new = 0
+
+        # 1) The one shared/admin inbox configured in .env (kept for
+        #    backward compatibility with existing setup/data).
         imap_host  = cfg.get("IMAP_HOST")
         imap_port  = cfg.get("IMAP_PORT", 993)
         imap_email = cfg.get("IMAP_EMAIL")
         imap_pw    = cfg.get("IMAP_PASSWORD")
 
-        if not all([imap_host, imap_email, imap_pw]):
-            logger.warning("IMAP not configured — skipping ingestion.")
-            return
+        if all([imap_host, imap_email, imap_pw]):
+            total_new += _fetch_mailbox(
+                imap_host, imap_port, imap_email, imap_pw,
+                db, cfg, owner_user_id=None, label=imap_email,
+            )
+        else:
+            logger.warning("Shared IMAP_EMAIL not configured — skipping shared inbox.")
 
-        try:
-            mail = imaplib.IMAP4_SSL(imap_host, imap_port)
-            mail.login(imap_email, imap_pw)
-            mail.select("INBOX")
+        # 2) Every user who has connected their own Gmail account.
+        users_with_gmail = User.query.filter(
+            User.gmail_email.isnot(None),
+            User.gmail_app_password.isnot(None),
+        ).all()
+
+        for user in users_with_gmail:
+            total_new += _fetch_mailbox(
+                cfg.get("IMAP_HOST", "imap.gmail.com"), cfg.get("IMAP_PORT", 993),
+                user.gmail_email, user.gmail_app_password,
+                db, cfg, owner_user_id=user.user_id, label=user.gmail_email,
+            )
+
+        logger.info(f"Processed {total_new} new emails across all accounts.")
+
+
+def _fetch_mailbox(imap_host, imap_port, imap_email, imap_pw, db, cfg, owner_user_id, label):
+    """Connect to ONE mailbox (the shared inbox, or a specific user's own) and ingest new mail."""
+    new_count = 0
+    try:
+        mail = imaplib.IMAP4_SSL(imap_host, imap_port)
+        mail.login(imap_email, imap_pw)
+
+        # Poll both INBOX and Gmail's own Spam folder. Gmail's built-in
+        # spam filter can intercept phishing-style emails before they
+        # ever reach INBOX — but PhishGuard is meant to make its own
+        # determination on every email, not rely on Gmail's filter to
+        # decide what it even gets to see.
+        for folder in ["INBOX", '"[Gmail]/Spam"']:
+            try:
+                status, _ = mail.select(folder)
+                if status != "OK":
+                    logger.warning(f"[{label}] Could not select folder {folder} — skipping.")
+                    continue
+            except Exception as e:
+                logger.warning(f"[{label}] Could not select folder {folder}: {e}")
+                continue
 
             # Fetch ALL emails — deduplication by Message-ID handles repeats
             # This ensures emails visible in Gmail AND PhishGuard at the same time
             _, data = mail.search(None, "ALL")
             uid_list = data[0].split()
-            logger.info(f"Found {len(uid_list)} total emails — checking for new ones.")
+            logger.info(f"[{label}] Found {len(uid_list)} total emails in {folder} — checking for new ones.")
 
-            new_count = 0
             for uid in uid_list:
                 try:
                     # Use BODY.PEEK[] instead of RFC822
@@ -63,24 +107,26 @@ def fetch_and_process_emails(app):
                         continue
 
                     msg          = email_lib.message_from_bytes(raw_bytes)
-                    email_record = _parse_and_store(msg, imap_email, db)
+                    actual_to    = _decode_header_value(msg.get("To", imap_email))
+                    email_record = _parse_and_store(msg, actual_to, db, owner_user_id=owner_user_id)
 
                     if email_record:
                         new_count += 1
                         _run_analysis_pipeline(email_record, db, cfg)
 
                 except Exception as e:
-                    logger.error(f"Error processing email UID {uid}: {e}")
+                    logger.error(f"[{label}] Error processing email UID {uid} in {folder}: {e}")
                     db.session.rollback()
 
-            logger.info(f"Processed {new_count} new emails.")
-            mail.logout()
+        mail.logout()
 
-        except Exception as e:
-            logger.error(f"IMAP connection error: {e}")
+    except Exception as e:
+        logger.error(f"[{label}] IMAP connection error: {e}")
+
+    return new_count
 
 
-def _parse_and_store(msg, receiver_email: str, db) -> Optional[object]:
+def _parse_and_store(msg, receiver_email: str, db, owner_user_id=None) -> Optional[object]:
     """Parse a raw email message and save to the emails table."""
     from app.models.email_model import Email
 
@@ -98,6 +144,7 @@ def _parse_and_store(msg, receiver_email: str, db) -> Optional[object]:
     body_plain, body_html = _extract_body(msg)
 
     email_record = Email(
+        user_id         = owner_user_id,
         sender_email    = sender[:255],
         receiver_email  = receiver_email[:255],
         subject         = subject[:500],

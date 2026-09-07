@@ -81,6 +81,11 @@ def _idle_loop(app, mail):
                     time.sleep(0.5)
                     mail.select("INBOX")
                     _sync_folder(app, mail, "INBOX", "inbox", "received")
+                    # Also check Gmail's own Spam folder — new mail can land
+                    # there directly (via Gmail's own spam filter) without
+                    # ever triggering an INBOX event.
+                    _sync_folder(app, mail, "[Gmail]/Spam", "spam", "received")
+                    mail.select("INBOX")
                     break
                 if "BYE" in decoded:
                     mail.send(b"DONE\r\n")
@@ -90,6 +95,7 @@ def _idle_loop(app, mail):
                 mail.send(b"DONE\r\n")
             except Exception:
                 pass
+            _sync_folder(app, mail, "[Gmail]/Spam", "spam", "received")
             mail.select("INBOX")
 
 

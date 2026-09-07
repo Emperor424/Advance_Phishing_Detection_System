@@ -148,6 +148,46 @@ def logout():
     return redirect(url_for("auth.login"))
 
 
+# ── Connect Gmail ─────────────────────────────────────────────────────────────
+@auth_bp.route("/connect-email", methods=["GET", "POST"])
+@login_required
+def connect_email():
+    if request.method == "POST":
+        gmail_email = request.form.get("gmail_email", "").strip().lower()
+        gmail_app_password = request.form.get("gmail_app_password", "").strip().replace(" ", "")
+        errors = []
+
+        if not gmail_email or "@" not in gmail_email:
+            errors.append("A valid Gmail address is required.")
+        if len(gmail_app_password) != 16 or not gmail_app_password.isalnum():
+            errors.append("App Password must be the 16-character code Google generated (no spaces).")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("auth/connect_email.html")
+
+        current_user.gmail_email = gmail_email
+        current_user.gmail_app_password = gmail_app_password
+        db.session.commit()
+        AuditLog.write("GMAIL_CONNECTED", f"Gmail connected: {gmail_email}", actor_id=current_user.user_id)
+        flash("Your email is connected! New mail will start appearing within a minute.", "success")
+        return redirect(url_for("auth.connect_email"))
+
+    return render_template("auth/connect_email.html")
+
+
+@auth_bp.route("/disconnect-email", methods=["POST"])
+@login_required
+def disconnect_email():
+    current_user.gmail_email = None
+    current_user.gmail_app_password = None
+    db.session.commit()
+    AuditLog.write("GMAIL_DISCONNECTED", "Gmail disconnected", actor_id=current_user.user_id)
+    flash("Your email has been disconnected.", "info")
+    return redirect(url_for("auth.connect_email"))
+
+
 # ── Helper ────────────────────────────────────────────────────────────────────
 def _send_activation_email(user: User, token: str):
     try:
