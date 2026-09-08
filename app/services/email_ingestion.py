@@ -76,7 +76,7 @@ def _fetch_mailbox(imap_host, imap_port, imap_email, imap_pw, db, cfg, owner_use
         # ever reach INBOX — but PhishGuard is meant to make its own
         # determination on every email, not rely on Gmail's filter to
         # decide what it even gets to see.
-        for folder in ["INBOX", '"[Gmail]/Spam"']:
+        for folder in ["INBOX"]:
             try:
                 status, _ = mail.select(folder)
                 if status != "OK":

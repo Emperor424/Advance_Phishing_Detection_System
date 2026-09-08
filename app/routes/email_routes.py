@@ -587,6 +587,12 @@ def bulk_action():
         db.session.commit()
         flash(f"Archived {count} email(s).", "success")
 
+    elif action == "mark_read":
+        for em in emails:
+            em.is_read = True
+        db.session.commit()
+        flash(f"Marked {count} email(s) as read.", "info")
+
     elif action == "mark_unread":
         for em in emails:
             em.is_read = False

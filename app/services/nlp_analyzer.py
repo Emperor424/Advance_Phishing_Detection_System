@@ -7,16 +7,19 @@ from typing import Dict, List
 
 # ── Trusted domains — NEVER flag as phishing ──────────────────────────────────
 TRUSTED_DOMAINS = {
-    "google.com", "accounts.google.com", "mail.google.com",
-    "notifications.google.com", "no-reply.accounts.google.com",
-    "microsoft.com", "live.com", "outlook.com", "hotmail.com",
-    "apple.com", "icloud.com", "amazon.com", "amazonses.com",
-    "paypal.com", "ebay.com", "facebook.com", "instagram.com",
-    "twitter.com", "linkedin.com", "github.com", "netflix.com",
-    "spotify.com", "adobe.com", "dropbox.com", "zoom.us",
-    "yahoo.com", "gmail.com",
+    # Google system notifications only
+    "accounts.google.com",
+    "notifications.google.com",
+    "no-reply.accounts.google.com",
+    # Microsoft system only
+    "microsoft.com",
+    "microsoftonline.com",
+    # Amazon SES (email delivery system)
+    "amazonses.com",
+    # Other systems
+    "github.com",
+    "zoom.us",
 }
-
 URGENCY_KEYWORDS = [
     "urgent", "immediately", "act now", "action required",
     "expires", "limited time", "last chance", "final notice",
