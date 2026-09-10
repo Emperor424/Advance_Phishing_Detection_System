@@ -47,6 +47,7 @@ class Config:
 
     # ── Misc ───────────────────────────────────────────────────────────────────
     ACTIVATION_TOKEN_EXPIRY_HOURS = int(os.environ.get("ACTIVATION_TOKEN_EXPIRY_HOURS", 24))
+    RESET_TOKEN_EXPIRY_MINUTES = int(os.environ.get("RESET_TOKEN_EXPIRY_MINUTES", 60))
     SAFE_BROWSING_API_KEY = os.environ.get("SAFE_BROWSING_API_KEY", "")
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16 MB upload limit
 

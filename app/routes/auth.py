@@ -138,6 +138,74 @@ def login():
     return render_template("auth/login.html")
 
 
+# ── Forgot password ───────────────────────────────────────────────────────────
+@auth_bp.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if current_user.is_authenticated:
+        return redirect(url_for("email.inbox"))
+
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+
+        if email:
+            user = User.query.filter_by(email=email).first()
+            if user and user.account_status == "active":
+                token = user.generate_reset_token(
+                    expiry_minutes=current_app.config["RESET_TOKEN_EXPIRY_MINUTES"]
+                )
+                db.session.commit()
+                _send_reset_email(user, token)
+                AuditLog.write("PASSWORD_RESET_REQUESTED", f"Password reset requested: {email}")
+
+        # Same message whether or not the account exists, so we don't leak
+        # which emails are registered.
+        flash("If an account exists for that email, a reset link has been sent.", "info")
+        return redirect(url_for("auth.login"))
+
+    return render_template("auth/forgot_password.html")
+
+
+# ── Reset password ────────────────────────────────────────────────────────────
+@auth_bp.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    if current_user.is_authenticated:
+        return redirect(url_for("email.inbox"))
+
+    user = User.query.filter_by(reset_token=token).first()
+    if not user or not user.is_reset_token_valid(token):
+        flash("This password reset link is invalid or has expired.", "danger")
+        return redirect(url_for("auth.forgot_password"))
+
+    if request.method == "POST":
+        password         = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        errors = []
+
+        if len(password) < 8:
+            errors.append("Password must be at least 8 characters.")
+        if not any(c.isupper() for c in password):
+            errors.append("Password must contain at least one uppercase letter.")
+        if not any(c.isdigit() for c in password):
+            errors.append("Password must contain at least one digit.")
+        if password != confirm_password:
+            errors.append("Passwords do not match.")
+
+        if errors:
+            for e in errors:
+                flash(e, "danger")
+            return render_template("auth/reset_password.html", token=token)
+
+        user.set_password(password)
+        user.clear_reset_token()
+        user.reset_failed_attempts()
+        db.session.commit()
+        AuditLog.write("PASSWORD_RESET_COMPLETED", f"Password reset: {user.email}", actor_id=user.user_id)
+        flash("Your password has been reset. You can now log in.", "success")
+        return redirect(url_for("auth.login"))
+
+    return render_template("auth/reset_password.html", token=token)
+
+
 # ── Logout ────────────────────────────────────────────────────────────────────
 @auth_bp.route("/logout")
 @login_required
@@ -209,3 +277,26 @@ def _send_activation_email(user: User, token: str):
         mail.send(msg)
     except Exception as ex:
         current_app.logger.error(f"Failed to send activation email: {ex}")
+
+
+def _send_reset_email(user: User, token: str):
+    try:
+        link = url_for("auth.reset_password", token=token, _external=True)
+        expiry_minutes = current_app.config["RESET_TOKEN_EXPIRY_MINUTES"]
+        msg = Message(
+            subject="Reset your PhishGuard password",
+            recipients=[user.email],
+        )
+        msg.html = f"""
+        <h2>Reset your password</h2>
+        <p>Hi {user.full_name}, we received a request to reset your PhishGuard password.</p>
+        <a href="{link}" style="display:inline-block;padding:12px 24px;background:#1d4ed8;
+           color:#fff;border-radius:6px;text-decoration:none;font-weight:bold;">
+           Reset Password
+        </a>
+        <p>This link expires in {expiry_minutes} minutes.</p>
+        <p>If you did not request this, you can safely ignore this email — your password will not change.</p>
+        """
+        mail.send(msg)
+    except Exception as ex:
+        current_app.logger.error(f"Failed to send password reset email: {ex}")

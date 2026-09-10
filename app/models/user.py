@@ -23,6 +23,8 @@ class User(UserMixin, db.Model):
     digest_frequency = db.Column(db.String(50), default="daily")
     gmail_email          = db.Column(db.String(255), nullable=True)
     gmail_app_password   = db.Column(db.String(255), nullable=True)
+    reset_token          = db.Column(db.String(255), nullable=True)
+    reset_token_expiry   = db.Column(db.DateTime, nullable=True)
 
     # Flask-Login requires get_id() to return a string
     def get_id(self):
@@ -52,6 +54,24 @@ class User(UserMixin, db.Model):
         if self.activation_token != token:
             return False
         return datetime.utcnow() < self.token_expiry
+
+    # ── Password reset token ──────────────────────────────────────────────────
+    def generate_reset_token(self, expiry_minutes: int = 60) -> str:
+        token = secrets.token_urlsafe(32)
+        self.reset_token = token
+        self.reset_token_expiry = datetime.utcnow() + timedelta(minutes=expiry_minutes)
+        return token
+
+    def is_reset_token_valid(self, token: str) -> bool:
+        if not self.reset_token or not self.reset_token_expiry:
+            return False
+        if self.reset_token != token:
+            return False
+        return datetime.utcnow() < self.reset_token_expiry
+
+    def clear_reset_token(self):
+        self.reset_token = None
+        self.reset_token_expiry = None
 
     # ── Account lock ──────────────────────────────────────────────────────────
     def is_locked(self) -> bool:
