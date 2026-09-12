@@ -1,148 +1,167 @@
-"""
-Email Ingestion Service
-Connects to IMAP, fetches unseen emails, parses MIME,
-runs the full analysis pipeline, and stores results.
-"""
 import imaplib
 import email as email_lib
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from email.header import decode_header
+from email.utils import parsedate_to_datetime
 from typing import Optional
-
+ 
 from flask import current_app
-
+ 
 logger = logging.getLogger(__name__)
-
-
+ 
+ 
+def _now():
+    """Current UTC time — compatible with database."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+ 
+ 
+def _parse_email_date(msg) -> datetime:
+    """
+    Extract actual email send time from Date header.
+    This matches the time Gmail shows — NOT the fetch time.
+    Falls back to current time if header is missing/invalid.
+    """
+    date_str = msg.get("Date", "")
+    if not date_str:
+        return _now()
+    try:
+        # parsedate_to_datetime handles all timezone formats
+        dt = parsedate_to_datetime(date_str)
+        # Convert to UTC then strip timezone info for DB
+        dt_utc = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt_utc
+    except Exception:
+        return _now()
+ 
+ 
 def fetch_and_process_emails(app):
     """
-    Scheduled job: connect to IMAP, fetch new emails, run analysis pipeline.
-    Runs within the given Flask app context.
-    Checks BOTH the one shared/admin inbox (from .env, if configured) AND
-    every individual user's own connected Gmail account (via their own
-    App Password) — so each user's real inbox is analysed separately.
-    Uses PEEK so emails stay unread in Gmail — visible in both Gmail and PhishGuard.
+    Scheduled job: connect to IMAP, fetch new emails, run analysis.
+    Checks shared/admin inbox AND every user's own connected Gmail.
+    Uses PEEK so emails stay unread in Gmail.
     """
     with app.app_context():
         from app import db
         from app.models.email_model import Email, EmailMonitoring
         from app.models.quarantine import SystemConfig
         from app.models.user import User
-
+ 
         cfg       = current_app.config
         total_new = 0
-
-        # 1) The one shared/admin inbox configured in .env (kept for
-        #    backward compatibility with existing setup/data).
+ 
+        # 1) Shared/admin inbox from .env
         imap_host  = cfg.get("IMAP_HOST")
         imap_port  = cfg.get("IMAP_PORT", 993)
         imap_email = cfg.get("IMAP_EMAIL")
         imap_pw    = cfg.get("IMAP_PASSWORD")
-
+ 
         if all([imap_host, imap_email, imap_pw]):
             total_new += _fetch_mailbox(
                 imap_host, imap_port, imap_email, imap_pw,
                 db, cfg, owner_user_id=None, label=imap_email,
             )
         else:
-            logger.warning("Shared IMAP_EMAIL not configured — skipping shared inbox.")
-
-        # 2) Every user who has connected their own Gmail account.
-        users_with_gmail = User.query.filter(
-            User.gmail_email.isnot(None),
-            User.gmail_app_password.isnot(None),
-        ).all()
-
-        for user in users_with_gmail:
-            total_new += _fetch_mailbox(
-                cfg.get("IMAP_HOST", "imap.gmail.com"), cfg.get("IMAP_PORT", 993),
-                user.gmail_email, user.gmail_app_password,
-                db, cfg, owner_user_id=user.user_id, label=user.gmail_email,
-            )
-
+            logger.warning("Shared IMAP_EMAIL not configured — skipping.")
+ 
+        # 2) Each user's own connected Gmail
+        try:
+            users_with_gmail = User.query.filter(
+                User.gmail_email.isnot(None),
+                User.gmail_app_password.isnot(None),
+            ).all()
+ 
+            for user in users_with_gmail:
+                total_new += _fetch_mailbox(
+                    cfg.get("IMAP_HOST", "imap.gmail.com"),
+                    cfg.get("IMAP_PORT", 993),
+                    user.gmail_email,
+                    user.gmail_app_password,
+                    db, cfg,
+                    owner_user_id=user.user_id,
+                    label=user.gmail_email,
+                )
+        except Exception as e:
+            logger.error(f"User Gmail fetch error: {e}")
+ 
         logger.info(f"Processed {total_new} new emails across all accounts.")
-
-
-def _fetch_mailbox(imap_host, imap_port, imap_email, imap_pw, db, cfg, owner_user_id, label):
-    """Connect to ONE mailbox (the shared inbox, or a specific user's own) and ingest new mail."""
+ 
+ 
+def _fetch_mailbox(imap_host, imap_port, imap_email, imap_pw,
+                   db, cfg, owner_user_id, label):
+    """Connect to ONE mailbox and ingest new emails."""
     new_count = 0
     try:
         mail = imaplib.IMAP4_SSL(imap_host, imap_port)
         mail.login(imap_email, imap_pw)
-
-        # Poll both INBOX and Gmail's own Spam folder. Gmail's built-in
-        # spam filter can intercept phishing-style emails before they
-        # ever reach INBOX — but PhishGuard is meant to make its own
-        # determination on every email, not rely on Gmail's filter to
-        # decide what it even gets to see.
+ 
+        # Only INBOX — PhishGuard makes its own spam/phishing determination
         for folder in ["INBOX"]:
             try:
                 status, _ = mail.select(folder)
                 if status != "OK":
-                    logger.warning(f"[{label}] Could not select folder {folder} — skipping.")
+                    logger.warning(f"[{label}] Cannot select {folder} — skipping.")
                     continue
             except Exception as e:
-                logger.warning(f"[{label}] Could not select folder {folder}: {e}")
+                logger.warning(f"[{label}] Folder select error {folder}: {e}")
                 continue
-
-            # Fetch ALL emails — deduplication by Message-ID handles repeats
-            # This ensures emails visible in Gmail AND PhishGuard at the same time
+ 
             _, data = mail.search(None, "ALL")
             uid_list = data[0].split()
-            logger.info(f"[{label}] Found {len(uid_list)} total emails in {folder} — checking for new ones.")
-
+            logger.info(f"[{label}] {len(uid_list)} emails in {folder}.")
+ 
             for uid in uid_list:
                 try:
-                    # Use BODY.PEEK[] instead of RFC822
-                    # PEEK = fetch email WITHOUT marking as read in Gmail
-                    # This means email stays visible in Gmail inbox too
+                    # PEEK = don't mark as read in Gmail
                     _, msg_data = mail.fetch(uid, "(BODY.PEEK[])")
-
                     if not msg_data or not msg_data[0]:
                         continue
-
                     raw_bytes = msg_data[0][1]
                     if not raw_bytes:
                         continue
-
-                    msg          = email_lib.message_from_bytes(raw_bytes)
-                    actual_to    = _decode_header_value(msg.get("To", imap_email))
-                    email_record = _parse_and_store(msg, actual_to, db, owner_user_id=owner_user_id)
-
+ 
+                    msg       = email_lib.message_from_bytes(raw_bytes)
+                    actual_to = _decode_header_value(msg.get("To", imap_email))
+                    email_record = _parse_and_store(
+                        msg, actual_to, db, owner_user_id=owner_user_id
+                    )
                     if email_record:
                         new_count += 1
                         _run_analysis_pipeline(email_record, db, cfg)
-
+ 
                 except Exception as e:
-                    logger.error(f"[{label}] Error processing email UID {uid} in {folder}: {e}")
+                    logger.error(f"[{label}] Error on UID {uid}: {e}")
                     db.session.rollback()
-
+ 
         mail.logout()
-
+ 
     except Exception as e:
         logger.error(f"[{label}] IMAP connection error: {e}")
-
+ 
     return new_count
-
-
-def _parse_and_store(msg, receiver_email: str, db, owner_user_id=None) -> Optional[object]:
-    """Parse a raw email message and save to the emails table."""
+ 
+ 
+def _parse_and_store(msg, receiver_email: str, db,
+                     owner_user_id=None) -> Optional[object]:
+    """Parse raw email and save to database with correct time."""
     from app.models.email_model import Email
-
+ 
     message_id = msg.get("Message-ID", "")
-
-    # Deduplication check — skip if already in database
+ 
+    # Skip duplicates
     if message_id and Email.query.filter_by(message_id=message_id).first():
-        logger.debug(f"Duplicate email skipped: {message_id}")
+        logger.debug(f"Duplicate skipped: {message_id}")
         return None
-
-    sender     = _decode_header_value(msg.get("From", ""))
-    subject    = _decode_header_value(msg.get("Subject", "(No Subject)"))
-    raw_hdrs   = str(msg)[:10000]
-
+ 
+    sender   = _decode_header_value(msg.get("From", ""))
+    subject  = _decode_header_value(msg.get("Subject", "(No Subject)"))
+    raw_hdrs = str(msg)[:10000]
+ 
     body_plain, body_html = _extract_body(msg)
-
+ 
+    # KEY FIX: Use email's own Date header — matches Gmail time exactly!
+    email_date = _parse_email_date(msg)
+ 
     email_record = Email(
         user_id         = owner_user_id,
         sender_email    = sender[:255],
@@ -154,17 +173,18 @@ def _parse_and_store(msg, receiver_email: str, db, owner_user_id=None) -> Option
         folder_status   = "inbox",
         email_direction = "received",
         message_id      = message_id[:500] if message_id else None,
-        received_time   = datetime.utcnow(),
+        sent_time       = email_date,   # ← actual send time (matches Gmail)
+        received_time   = email_date,   # ← same so display is consistent
         has_attachments = _has_attachments(msg),
     )
     db.session.add(email_record)
     db.session.commit()
-    logger.info(f"Stored new email #{email_record.email_id}: {subject[:50]}")
+    logger.info(f"Stored #{email_record.email_id}: {subject[:50]} @ {email_date}")
     return email_record
-
-
+ 
+ 
 def _run_analysis_pipeline(email_record, db, cfg):
-    """Run NLP → Link → Header → ML → Quarantine for a stored email."""
+    """Run NLP → Link → Header → ML → route to correct folder."""
     from app.models.email_model import EmailMonitoring
     from app.models.analysis import (
         NLPAnalysis, LinkAnalysis, HeaderAnalysis,
@@ -173,26 +193,25 @@ def _run_analysis_pipeline(email_record, db, cfg):
     from app.models.quarantine import QuarantineItem, SystemConfig
     from app.services import nlp_analyzer, link_analyzer, header_analyzer, ml_classifier
     import secrets
-
+ 
     mon = EmailMonitoring(
-        email_id         = email_record.email_id,
-        monitoring_status= "analysing",
-        processing_stage = "nlp_analysis"
+        email_id          = email_record.email_id,
+        monitoring_status = "analysing",
+        processing_stage  = "nlp_analysis"
     )
     db.session.add(mon)
     db.session.commit()
-
+ 
     try:
-        # 1. NLP Analysis
+        # 1. NLP
         mon.processing_stage = "nlp_analysis"
         db.session.commit()
         nlp_result = nlp_analyzer.analyze_text(
             email_record.email_body or "", email_record.sender_email
         )
-        nlp = NLPAnalysis(email_id=email_record.email_id, **nlp_result)
-        db.session.add(nlp)
-
-        # 2. Link Analysis
+        db.session.add(NLPAnalysis(email_id=email_record.email_id, **nlp_result))
+ 
+        # 2. Links
         mon.processing_stage = "link_analysis"
         db.session.commit()
         link_results = link_analyzer.analyze_links(
@@ -202,59 +221,53 @@ def _run_analysis_pipeline(email_record, db, cfg):
         )
         for lr in link_results:
             db.session.add(LinkAnalysis(email_id=email_record.email_id, **lr))
-
-        # 3. Header Analysis
+ 
+        # 3. Headers
         mon.processing_stage = "header_analysis"
         db.session.commit()
         hdr_result = header_analyzer.analyze_headers(
             email_record.raw_headers or "", email_record.sender_email
         )
-        hdr = HeaderAnalysis(email_id=email_record.email_id, **hdr_result)
-        db.session.add(hdr)
+        db.session.add(HeaderAnalysis(email_id=email_record.email_id, **hdr_result))
         db.session.commit()
-
-        # 4. Sender Reputation
+ 
+        # 4. Sender reputation
         sender_rep = SenderReputation.query.filter_by(
             sender_email=email_record.sender_email
         ).first()
         rep_rate = sender_rep.phishing_rate if sender_rep else 0.0
-
+ 
         # 5. ML Classification
         mon.processing_stage = "ml_classification"
         db.session.commit()
         threshold  = int(SystemConfig.get("quarantine_threshold", "65"))
         clf_result = ml_classifier.classify_email(
-            nlp            = nlp_result,
-            links          = link_results,
-            header         = hdr_result,
-            sender_rep_rate= rep_rate,
-            model_path     = cfg.get("MODEL_PATH"),
-            threshold      = threshold,
+            nlp             = nlp_result,
+            links           = link_results,
+            header          = hdr_result,
+            sender_rep_rate = rep_rate,
+            model_path      = cfg.get("MODEL_PATH"),
+            threshold       = threshold,
         )
-
-        classification = Classification(email_id=email_record.email_id, **clf_result)
-        db.session.add(classification)
-
-        # 6. Route email to correct folder
+        db.session.add(Classification(email_id=email_record.email_id, **clf_result))
+ 
+        # 6. Route to folder
         if clf_result["label"] == "phishing":
             email_record.folder_status = "quarantine"
-            qi = QuarantineItem(
-                email_id    = email_record.email_id,
-                user_id     = email_record.user_id or 1,
-                status      = "held",
-                action_token= secrets.token_urlsafe(32),
-            )
-            db.session.add(qi)
+            db.session.add(QuarantineItem(
+                email_id     = email_record.email_id,
+                user_id      = email_record.user_id or 1,
+                status       = "held",
+                action_token = secrets.token_urlsafe(32),
+            ))
             is_phishing = True
-
         elif clf_result["label"] == "suspicious":
             email_record.folder_status = "spam"
             is_phishing = True
-
         else:
             email_record.folder_status = "inbox"
             is_phishing = False
-
+ 
         # 7. Update sender reputation
         if not sender_rep:
             sender_domain = (
@@ -262,34 +275,34 @@ def _run_analysis_pipeline(email_record, db, cfg):
                 if "@" in email_record.sender_email else ""
             )
             sender_rep = SenderReputation(
-                sender_email  = email_record.sender_email,
-                sender_domain = sender_domain,
-                total_emails  = 0,
-                phishing_count= 0,
+                sender_email   = email_record.sender_email,
+                sender_domain  = sender_domain,
+                total_emails   = 0,
+                phishing_count = 0,
             )
             db.session.add(sender_rep)
         sender_rep.update_reputation(is_phishing)
-
+ 
         mon.monitoring_status = "completed"
         mon.processing_stage  = "done"
-        mon.finish_time       = datetime.utcnow()
+        mon.finish_time       = _now()
         db.session.commit()
-
+ 
         logger.info(
-            f"Email #{email_record.email_id} → {clf_result['label'].upper()} "
-            f"(score={clf_result['risk_score']}) → folder: {email_record.folder_status}"
+            f"#{email_record.email_id} → {clf_result['label'].upper()} "
+            f"(score={clf_result['risk_score']}) → {email_record.folder_status}"
         )
-
+ 
     except Exception as e:
         mon.monitoring_status = "failed"
         mon.error_message     = str(e)[:500]
-        mon.finish_time       = datetime.utcnow()
+        mon.finish_time       = _now()
         db.session.commit()
-        logger.error(f"Pipeline failed for email #{email_record.email_id}: {e}")
-
-
+        logger.error(f"Pipeline failed #{email_record.email_id}: {e}")
+ 
+ 
 # ── MIME helpers ──────────────────────────────────────────────────────────────
-
+ 
 def _decode_header_value(value: str) -> str:
     parts = decode_header(value or "")
     decoded = []
@@ -299,8 +312,8 @@ def _decode_header_value(value: str) -> str:
         else:
             decoded.append(str(part))
     return " ".join(decoded)
-
-
+ 
+ 
 def _extract_body(msg) -> tuple:
     body_plain = ""
     body_html  = ""
@@ -325,11 +338,10 @@ def _extract_body(msg) -> tuple:
             charset    = msg.get_content_charset() or "utf-8"
             body_plain = payload.decode(charset, errors="replace")
     return body_plain, body_html
-
-
+ 
+ 
 def _has_attachments(msg) -> bool:
     for part in msg.walk():
-        disp = str(part.get("Content-Disposition", ""))
-        if "attachment" in disp:
+        if "attachment" in str(part.get("Content-Disposition", "")):
             return True
     return False

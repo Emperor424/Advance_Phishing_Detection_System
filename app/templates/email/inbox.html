@@ -72,26 +72,23 @@
 
 {% if emails.items %}
 
-<!-- Bulk Action Toolbar -->
+<!-- Bulk Action Form -->
 <form id="bulk-form" method="POST" action="{{ url_for('email.bulk_action') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="folder"     value="{{ folder }}">
   <input type="hidden" name="action"     value="" id="bulk-action-val">
 
-  <!-- Toolbar (hidden until emails selected) -->
+  <!-- Bulk Toolbar -->
   <div id="bulk-toolbar" style="
-    display:none;
-    align-items:center;
-    gap:8px;
-    padding:10px 14px;
-    background:#eff6ff;
-    border:1px solid #bfdbfe;
-    border-radius:8px;
-    margin-bottom:8px;
-    flex-wrap:wrap;
-  ">
-    <span id="selected-count" style="font-size:13px;font-weight:700;color:#1e40af;
-          margin-right:4px;">0 selected</span>
+    display:none; align-items:center; gap:8px;
+    padding:10px 14px; background:#eff6ff;
+    border:1px solid #bfdbfe; border-radius:8px;
+    margin-bottom:8px; flex-wrap:wrap;">
+
+    <span id="selected-count"
+          style="font-size:13px;font-weight:700;color:#1e40af;margin-right:4px;">
+      0 selected
+    </span>
 
     {% if folder != 'trash' %}
     <button type="button" class="btn btn-sm btn-danger" onclick="bulkAction('delete')">
@@ -104,8 +101,7 @@
       ↩️ Restore
     </button>
     <button type="button" class="btn btn-sm btn-danger"
-            style="background:#7f1d1d;"
-            onclick="bulkAction('delete_permanent')">
+            style="background:#7f1d1d;" onclick="bulkAction('delete_permanent')">
       ⛔ Delete Forever
     </button>
     {% endif %}
@@ -116,7 +112,7 @@
     </button>
     {% endif %}
 
-    {% if folder == 'inbox' %}
+    {% if folder in ['inbox','spam','archive','starred'] %}
     <button type="button" class="btn btn-sm btn-secondary" onclick="bulkAction('mark_read')">
       ✉️ Mark Read
     </button>
@@ -133,7 +129,7 @@
   <!-- Email List -->
   <div class="email-list" id="email-list">
 
-    <!-- Select All Row -->
+    <!-- Select All -->
     <div class="email-row-wrap" style="background:#f9fafb;border-bottom:2px solid #e5e7eb;">
       <label style="display:flex;align-items:center;padding:8px 12px;cursor:pointer;gap:8px;">
         <input type="checkbox" id="select-all" style="width:16px;height:16px;cursor:pointer;">
@@ -173,7 +169,7 @@
         </button>
       </form>
 
-      <!-- Email row -->
+      <!-- Email row link -->
       <a href="{% if folder=='draft' %}{{ url_for('email.compose', draft_id=em.email_id) }}{% else %}{{ url_for('email.view', email_id=em.email_id) }}{% endif %}"
          class="email-row-inner">
         <div class="email-sender">{{ em.sender_email[:28] }}</div>
@@ -193,9 +189,12 @@
             {{ clf.risk_score|round|int }}</span>
           {% endif %}
           {% endif %}
+          <!-- Local time — use sent_time (matches Gmail) -->
+          {% set display_time = em.sent_time or em.received_time %}
           <span class="email-time local-time"
-                data-utc="{{ em.received_time.strftime('%Y-%m-%dT%H:%M:%SZ') if em.received_time else '' }}">
-            {{ em.received_time.strftime('%b %d') if em.received_time else '' }}
+                data-utc="{{ display_time.strftime('%Y-%m-%dT%H:%M:%SZ') if display_time else '' }}"
+                title="">
+            {{ display_time.strftime('%b %d') if display_time else '' }}
           </span>
         </div>
       </a>
@@ -208,7 +207,7 @@
           <button class="quick-btn" type="submit" title="Restore">↩️</button>
         </form>
         <form method="POST" action="{{ url_for('email.delete_permanent', email_id=em.email_id) }}"
-              onsubmit="return confirm('Permanently delete this email? This cannot be undone!')">
+              onsubmit="return confirm('Permanently delete? Cannot be undone!')">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="quick-btn quick-btn-danger" type="submit" title="Delete forever">🗑️</button>
         </form>
@@ -255,87 +254,48 @@
 {% else %}
 <div class="empty-state">
   <div class="empty-icon">
-    {% if folder=='trash' %}🗑️{% elif folder=='starred' %}⭐{% elif folder=='draft' %}📝{% else %}📭{% endif %}
+    {% if folder=='trash' %}🗑️
+    {% elif folder=='starred' %}⭐
+    {% elif folder=='draft' %}📝
+    {% elif folder=='archive' %}🗄️
+    {% elif folder=='spam' %}⚠️
+    {% else %}📭{% endif %}
   </div>
   <p>{% if search %}No results for "<strong>{{ search }}</strong>"{% else %}No emails in {{ folder }}.{% endif %}</p>
 </div>
 {% endif %}
 
 <style>
-/* Checkbox wrap */
-.checkbox-wrap {
-  display:flex; align-items:center; cursor:pointer; flex-shrink:0;
-}
-.email-checkbox { accent-color:#1d4ed8; }
-
-/* Email row */
-.email-row-wrap {
-  display:flex; align-items:center; border-bottom:1px solid #f3f4f6;
-  transition:background .12s; position:relative;
-}
-.email-row-wrap:hover { background:#f9fafb; }
-.email-row-wrap:hover .email-quick-actions { opacity:1; }
-.email-row-wrap.selected { background:#eff6ff!important; }
-.email-row-wrap.unread .email-subject { font-weight:700; color:#111827; }
-.row-phishing   { background:#fff5f5!important; border-left:3px solid #dc2626; }
-.row-suspicious { background:#fffbeb!important; border-left:3px solid #f59e0b; }
-.row-phishing.selected   { background:#fee2e2!important; }
-.row-suspicious.selected { background:#fef3c7!important; }
-
-/* Star */
-.star-btn {
-  background:none; border:none; cursor:pointer;
-  padding:8px 4px; font-size:16px; opacity:.5;
-  transition:opacity .15s; flex-shrink:0;
-}
-.star-btn:hover { opacity:1; }
-
-/* Email row inner */
-.email-row-inner {
-  display:grid; grid-template-columns:180px 1fr 180px;
-  align-items:center; gap:12px; padding:12px 8px;
-  text-decoration:none; color:inherit; flex:1; min-width:0;
-}
-.email-sender  { font-size:13px; color:#374151; font-weight:500;
-  overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.email-subject { font-size:14px; color:#374151;
-  overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.email-meta    { display:flex; align-items:center; gap:6px; justify-content:flex-end; }
-.email-time    { font-size:12px; color:#9ca3af; white-space:nowrap; }
-.unread-dot    {
-  display:inline-block; width:6px; height:6px;
-  background:#1d4ed8; border-radius:50%;
-  margin-right:6px; vertical-align:middle;
-}
-
-/* Quick actions */
-.email-quick-actions {
-  display:flex; gap:4px; padding:0 10px;
-  opacity:0; transition:opacity .15s; flex-shrink:0;
-}
-.quick-btn {
-  background:none; border:1px solid #e5e7eb; cursor:pointer;
-  padding:4px 8px; border-radius:6px; font-size:14px;
-  text-decoration:none; color:inherit; transition:background .15s;
-}
-.quick-btn:hover         { background:#f3f4f6; }
-.quick-btn-danger:hover  { background:#fee2e2; border-color:#fecaca; }
-
-/* Labels */
-.inbox-label {
-  display:inline-block; padding:2px 8px; border-radius:20px;
-  font-size:10px; font-weight:700; letter-spacing:.04em; white-space:nowrap;
-}
-.inbox-label-phishing   { background:#fee2e2; color:#991b1b; }
-.inbox-label-suspicious { background:#fef3c7; color:#92400e; }
-.inbox-label-safe       { background:#dcfce7; color:#15803d; }
-.inbox-label-sent       { background:#dbeafe; color:#1e40af; }
-.inbox-label-checking   { background:#f3f4f6; color:#6b7280; }
-
-@media(max-width:700px) {
-  .email-row-inner { grid-template-columns:1fr 100px; }
-  .email-sender    { display:none; }
-}
+.checkbox-wrap{display:flex;align-items:center;cursor:pointer;flex-shrink:0;}
+.email-checkbox{accent-color:#1d4ed8;}
+.email-row-wrap{display:flex;align-items:center;border-bottom:1px solid #f3f4f6;transition:background .12s;position:relative;}
+.email-row-wrap:hover{background:#f9fafb;}
+.email-row-wrap:hover .email-quick-actions{opacity:1;}
+.email-row-wrap.selected{background:#eff6ff!important;}
+.email-row-wrap.unread .email-subject{font-weight:700;color:#111827;}
+.row-phishing{background:#fff5f5!important;border-left:3px solid #dc2626;}
+.row-suspicious{background:#fffbeb!important;border-left:3px solid #f59e0b;}
+.row-phishing.selected{background:#fee2e2!important;}
+.row-suspicious.selected{background:#fef3c7!important;}
+.star-btn{background:none;border:none;cursor:pointer;padding:8px 4px;font-size:16px;opacity:.5;transition:opacity .15s;flex-shrink:0;}
+.star-btn:hover{opacity:1;}
+.email-row-inner{display:grid;grid-template-columns:180px 1fr 180px;align-items:center;gap:12px;padding:12px 8px;text-decoration:none;color:inherit;flex:1;min-width:0;}
+.email-sender{font-size:13px;color:#374151;font-weight:500;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.email-subject{font-size:14px;color:#374151;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.email-meta{display:flex;align-items:center;gap:6px;justify-content:flex-end;}
+.email-time{font-size:12px;color:#9ca3af;white-space:nowrap;}
+.unread-dot{display:inline-block;width:6px;height:6px;background:#1d4ed8;border-radius:50%;margin-right:6px;vertical-align:middle;}
+.email-quick-actions{display:flex;gap:4px;padding:0 10px;opacity:0;transition:opacity .15s;flex-shrink:0;}
+.quick-btn{background:none;border:1px solid #e5e7eb;cursor:pointer;padding:4px 8px;border-radius:6px;font-size:14px;text-decoration:none;color:inherit;transition:background .15s;}
+.quick-btn:hover{background:#f3f4f6;}
+.quick-btn-danger:hover{background:#fee2e2;border-color:#fecaca;}
+.inbox-label{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.04em;white-space:nowrap;}
+.inbox-label-phishing{background:#fee2e2;color:#991b1b;}
+.inbox-label-suspicious{background:#fef3c7;color:#92400e;}
+.inbox-label-safe{background:#dcfce7;color:#15803d;}
+.inbox-label-sent{background:#dbeafe;color:#1e40af;}
+.inbox-label-checking{background:#f3f4f6;color:#6b7280;}
+@media(max-width:700px){.email-row-inner{grid-template-columns:1fr 100px;}.email-sender{display:none;}}
 </style>
 
 <script>
@@ -350,27 +310,24 @@ function getChecked() {
 
 function updateToolbar() {
   const checked = getChecked();
-  const n       = checked.length;
+  const n = checked.length;
   if (n > 0) {
     toolbar.style.display = 'flex';
     countLabel.textContent = n + ' selected';
   } else {
     toolbar.style.display = 'none';
   }
-  // Highlight selected rows
   document.querySelectorAll('.email-row-wrap[data-id]').forEach(row => {
     const cb = row.querySelector('.email-checkbox');
     row.classList.toggle('selected', cb?.checked || false);
   });
-  // Update select-all state
   const allCbs = document.querySelectorAll('.email-checkbox');
   if (selectAll) {
     selectAll.indeterminate = n > 0 && n < allCbs.length;
-    selectAll.checked       = n === allCbs.length && allCbs.length > 0;
+    selectAll.checked = n === allCbs.length && allCbs.length > 0;
   }
 }
 
-// Select all toggle
 selectAll?.addEventListener('change', () => {
   document.querySelectorAll('.email-checkbox').forEach(cb => {
     cb.checked = selectAll.checked;
@@ -378,7 +335,6 @@ selectAll?.addEventListener('change', () => {
   updateToolbar();
 });
 
-// Individual checkbox
 document.querySelectorAll('.email-checkbox').forEach(cb => {
   cb.addEventListener('change', updateToolbar);
 });
@@ -395,19 +351,15 @@ function bulkAction(action) {
     alert('Please select at least one email.');
     return;
   }
-
-  // Confirmation messages
   const msgs = {
     delete:           `Move ${checked.length} email(s) to Trash?`,
-    delete_permanent: `Permanently delete ${checked.length} email(s)? This CANNOT be undone!`,
+    delete_permanent: `Permanently delete ${checked.length} email(s)? CANNOT be undone!`,
     archive:          `Archive ${checked.length} email(s)?`,
     restore:          `Restore ${checked.length} email(s) to Inbox?`,
     mark_read:        `Mark ${checked.length} email(s) as read?`,
     mark_unread:      `Mark ${checked.length} email(s) as unread?`,
   };
-
   if (!confirm(msgs[action] || `Perform ${action} on ${checked.length} email(s)?`)) return;
-
   document.getElementById('bulk-action-val').value = action;
   document.getElementById('bulk-form').submit();
 }
@@ -417,28 +369,48 @@ document.querySelectorAll('.local-time[data-utc]').forEach(el => {
   const utc = el.dataset.utc;
   if (!utc) return;
   try {
-    const d   = new Date(utc);
-    const now = new Date();
-    const diffDays = Math.floor((now - d) / 86400000);
+    // Ensure Z suffix so browser treats as UTC
+    const raw = utc.endsWith('Z') || utc.includes('+') ? utc : utc + 'Z';
+    const d   = new Date(raw);
+    if (isNaN(d)) return;
+    const now      = new Date();
+    const diffMs   = now - d;
+    const diffDays = Math.floor(diffMs / 86400000);
+
     if (diffDays === 0) {
+      // Today — show time only
       el.textContent = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     } else if (diffDays < 7) {
+      // This week — show day name
       el.textContent = d.toLocaleDateString([], {weekday:'short'});
     } else {
+      // Older — show date
       el.textContent = d.toLocaleDateString([], {month:'short', day:'numeric'});
     }
-    el.title = d.toLocaleString();
+    // Full date on hover
+    el.title = d.toLocaleString([], {
+      weekday:'short', year:'numeric', month:'short',
+      day:'numeric', hour:'2-digit', minute:'2-digit',
+      timeZoneName:'short'
+    });
   } catch(e) {}
 });
 
-// ── Real-time count check ─────────────────────────────────────────────────────
-let prevCounts = {inbox:{{ counts.inbox }},spam:{{ counts.spam }},quarantine:{{ counts.quarantine }}};
+// ── Real-time new email check ─────────────────────────────────────────────────
+let prevCounts = {
+  inbox:      {{ counts.inbox }},
+  spam:       {{ counts.spam }},
+  quarantine: {{ counts.quarantine }},
+  draft:      {{ counts.draft }},
+};
 function checkNew() {
   fetch('/api/email/count')
     .then(r => r.json())
     .then(d => {
       const cur = '{{ folder }}';
-      if ((d[cur] || 0) > (prevCounts[cur] || 0)) setTimeout(() => location.reload(), 800);
+      if ((d[cur] || 0) > (prevCounts[cur] || 0)) {
+        setTimeout(() => location.reload(), 800);
+      }
       prevCounts = d;
     }).catch(() => {});
 }

@@ -1,6 +1,6 @@
 import smtplib
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -16,24 +16,28 @@ email_bp = Blueprint("email", __name__)
 logger   = logging.getLogger(__name__)
 
 
+def _now():
+    """Current UTC time — timezone aware then stripped for DB compatibility."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _email_matches(column, email):
     """
     Exact email address match (case insensitive).
-    Handles formats: "user@example.com" and "Name <user@example.com>"
-    Avoids partial matches like "phish" matching "phishguard604@gmail.com"
+    Handles: "user@example.com" and "Name <user@example.com>"
     """
     return db.or_(
-        db.func.lower(column) == email,                    # exact match
-        column.ilike(f"{email},%"),                        # first in list
-        column.ilike(f"%, {email}"),                       # last in list
-        column.ilike(f"%, {email},%"),                     # middle of list
-        column.ilike(f"%<{email}>%"),                      # inside < >
-        column.ilike(f"% {email} %"),                      # surrounded by spaces
+        db.func.lower(column) == email,
+        column.ilike(f"{email},%"),
+        column.ilike(f"%, {email}"),
+        column.ilike(f"%, {email},%"),
+        column.ilike(f"%<{email}>%"),
+        column.ilike(f"% {email} %"),
     )
 
 
 def _base_query():
-    """All emails visible to current user — matched by their own registered email address."""
+    """All emails visible to current user."""
     if current_user.is_admin:
         return Email.query
     uid   = current_user.user_id
@@ -58,10 +62,9 @@ def _sent_query():
 
 
 def _inbox_query():
-    """Inbox: exact email match to avoid false positives."""
+    """Inbox emails for current user."""
     if current_user.is_admin:
         return Email.query.filter_by(folder_status="inbox")
-
     uid   = current_user.user_id
     email = current_user.email.lower().strip()
     return Email.query.filter(
@@ -244,10 +247,14 @@ def compose():
                     return redirect(url_for("email.inbox", folder="draft"))
 
             draft = Email(
-                user_id=current_user.user_id, sender_email=current_user.email,
-                receiver_email=to_addr[:255], subject=subject[:500],
-                email_body=body, folder_status="draft",
-                email_direction="sent", received_time=datetime.utcnow(),
+                user_id=current_user.user_id,
+                sender_email=current_user.email,
+                receiver_email=to_addr[:255],
+                subject=subject[:500],
+                email_body=body,
+                folder_status="draft",
+                email_direction="sent",
+                received_time=_now(),
             )
             db.session.add(draft)
             db.session.commit()
@@ -269,7 +276,6 @@ def compose():
 
         success = _smtp_send(current_user.email, to_addr, subject, body)
         if success:
-            # Delete draft if existed
             if d_id:
                 draft = Email.query.filter_by(
                     email_id=d_id, user_id=current_user.user_id
@@ -277,25 +283,27 @@ def compose():
                 if draft:
                     db.session.delete(draft)
 
-            # Save to sender's Sent folder
+            now = _now()
             db.session.add(Email(
                 user_id=current_user.user_id,
                 sender_email=current_user.email,
                 receiver_email=to_addr[:255],
-                subject=subject[:500], email_body=body,
-                folder_status="sent", email_direction="sent",
-                sent_time=datetime.utcnow(), received_time=datetime.utcnow(),
+                subject=subject[:500],
+                email_body=body,
+                folder_status="sent",
+                email_direction="sent",
+                sent_time=now,
+                received_time=now,
             ))
             db.session.commit()
 
-            # ── KEY FIX: Deliver to recipient's PhishGuard inbox ─────────────
+            # Deliver to recipient's PhishGuard inbox
             from app.models.user import User
             recipient_user = User.query.filter(
                 User.email.ilike(to_addr.strip())
             ).first()
 
             if recipient_user and recipient_user.user_id != current_user.user_id:
-                # Create a copy in recipient's inbox
                 inbox_copy = Email(
                     user_id         = recipient_user.user_id,
                     sender_email    = current_user.email,
@@ -304,23 +312,18 @@ def compose():
                     email_body      = body,
                     folder_status   = "inbox",
                     email_direction = "received",
-                    sent_time       = datetime.utcnow(),
-                    received_time   = datetime.utcnow(),
+                    sent_time       = now,
+                    received_time   = now,
                     is_read         = False,
                 )
                 db.session.add(inbox_copy)
                 db.session.commit()
-
-                # Run phishing analysis on the received copy
                 try:
                     from app.services.gmail_sync import _fast_analyse
                     _fast_analyse(inbox_copy, db, current_app.config)
                 except Exception as e:
                     logger.error(f"Analysis on inbox copy failed: {e}")
-
-                logger.info(
-                    f"Delivered '{subject}' to {recipient_user.email}'s inbox"
-                )
+                logger.info(f"Delivered '{subject}' to {recipient_user.email}")
 
             flash("Email sent!", "success")
             return redirect(url_for("email.inbox", folder="sent"))
@@ -336,10 +339,12 @@ def compose():
 def reply(email_id):
     return redirect(url_for("email.compose", reply_to=email_id))
 
+
 @email_bp.route("/forward/<int:email_id>")
 @login_required
 def forward(email_id):
     return redirect(url_for("email.compose", forward_id=email_id))
+
 
 @email_bp.route("/star/<int:email_id>", methods=["POST"])
 @login_required
@@ -354,6 +359,7 @@ def toggle_star(email_id):
     flash("⭐ Starred!" if em.is_starred else "Unstarred.", "info")
     return redirect(request.referrer or url_for("email.inbox"))
 
+
 @email_bp.route("/unread/<int:email_id>", methods=["POST"])
 @login_required
 def mark_unread(email_id):
@@ -366,6 +372,7 @@ def mark_unread(email_id):
     flash("Marked as unread.", "info")
     return redirect(url_for("email.inbox", folder=em.folder_status))
 
+
 @email_bp.route("/archive/<int:email_id>", methods=["POST"])
 @login_required
 def archive(email_id):
@@ -374,9 +381,11 @@ def archive(email_id):
         flash("Not found.", "danger")
         return redirect(url_for("email.inbox"))
     em.folder_status = "archive"
+    em.user_id       = current_user.user_id  # assign so user can see it
     db.session.commit()
     flash("Archived.", "success")
     return redirect(url_for("email.inbox"))
+
 
 @email_bp.route("/quarantine/<int:email_id>", methods=["POST"])
 @login_required
@@ -391,6 +400,7 @@ def move_to_quarantine(email_id):
         flash("Already in quarantine.", "info")
         return redirect(url_for("email.view", email_id=email_id))
     em.folder_status = "quarantine"
+    em.user_id       = current_user.user_id
     if not em.quarantine_item:
         db.session.add(QuarantineItem(
             email_id=em.email_id, user_id=current_user.user_id,
@@ -399,6 +409,7 @@ def move_to_quarantine(email_id):
     db.session.commit()
     flash("Moved to quarantine.", "warning")
     return redirect(url_for("quarantine.index"))
+
 
 @email_bp.route("/delete/<int:email_id>", methods=["POST"])
 @login_required
@@ -409,9 +420,11 @@ def delete_email(email_id):
         return redirect(url_for("email.inbox"))
     prev = em.folder_status
     em.folder_status = "trash"
+    em.user_id       = current_user.user_id
     db.session.commit()
     flash("Moved to Trash.", "success")
     return redirect(url_for("email.inbox", folder=prev))
+
 
 @email_bp.route("/delete-permanent/<int:email_id>", methods=["POST"])
 @login_required
@@ -425,6 +438,7 @@ def delete_permanent(email_id):
     flash("Permanently deleted.", "success")
     return redirect(url_for("email.inbox", folder="trash"))
 
+
 @email_bp.route("/restore/<int:email_id>", methods=["POST"])
 @login_required
 def restore(email_id):
@@ -433,9 +447,11 @@ def restore(email_id):
         flash("Not found.", "danger")
         return redirect(url_for("email.inbox"))
     em.folder_status = "inbox"
+    em.user_id       = current_user.user_id
     db.session.commit()
     flash("Restored to Inbox.", "success")
     return redirect(url_for("email.inbox"))
+
 
 @email_bp.route("/refresh")
 @login_required
@@ -447,6 +463,7 @@ def refresh():
     except Exception as e:
         flash(f"Refresh failed: {e}", "danger")
     return redirect(url_for("email.inbox"))
+
 
 @email_bp.route("/feedback/<int:email_id>", methods=["POST"])
 @login_required
@@ -464,7 +481,8 @@ def submit_feedback(email_id):
         email_id=email_id, user_id=current_user.user_id
     ).delete()
     db.session.add(FeedbackLabel(
-        email_id=email_id, user_id=current_user.user_id,
+        email_id=email_id,
+        user_id=current_user.user_id,
         user_label=user_label,
         original_label=clf.label if clf else "unknown",
         misclassification_flag=(user_label != (clf.label if clf else "unknown")),
@@ -472,6 +490,7 @@ def submit_feedback(email_id):
     db.session.commit()
     flash("Feedback saved!", "success")
     return redirect(url_for("email.view", email_id=email_id))
+
 
 @email_bp.route("/api/count")
 @login_required
@@ -489,6 +508,7 @@ def api_count():
         "starred":    _base_query().filter_by(is_starred=True).count(),
         "unread":     _inbox_query().filter_by(is_read=False).count(),
     })
+
 
 @email_bp.route("/analyse/<int:email_id>")
 @login_required
@@ -556,7 +576,6 @@ def bulk_action():
         flash("No emails selected.", "warning")
         return redirect(url_for("email.inbox", folder=folder))
 
-    # Get emails user has permission to access
     emails = []
     for eid in email_ids:
         em = _get_email(eid)
@@ -572,6 +591,7 @@ def bulk_action():
     if action == "delete":
         for em in emails:
             em.folder_status = "trash"
+            em.user_id       = current_user.user_id
         db.session.commit()
         flash(f"Moved {count} email(s) to Trash.", "success")
 
@@ -584,6 +604,7 @@ def bulk_action():
     elif action == "archive":
         for em in emails:
             em.folder_status = "archive"
+            em.user_id       = current_user.user_id
         db.session.commit()
         flash(f"Archived {count} email(s).", "success")
 
@@ -598,6 +619,13 @@ def bulk_action():
             em.is_read = False
         db.session.commit()
         flash(f"Marked {count} email(s) as unread.", "info")
+
+    elif action == "restore":
+        for em in emails:
+            em.folder_status = "inbox"
+            em.user_id       = current_user.user_id
+        db.session.commit()
+        flash(f"Restored {count} email(s) to Inbox.", "success")
 
     else:
         flash("Unknown action.", "danger")

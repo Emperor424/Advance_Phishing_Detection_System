@@ -6,10 +6,9 @@
 {% set nlp = email.nlp_analysis %}
 {% set hdr = email.header_analysis %}
 
-<!-- Fix 2: Check if CURRENT USER actually sent this email -->
 {% set i_sent_this = current_user.email|lower in (email.sender_email or '')|lower %}
-{% set is_my_sent = email.email_direction == 'sent' and i_sent_this %}
-{% set is_draft   = email.folder_status == 'draft' %}
+{% set is_my_sent  = email.email_direction == 'sent' and i_sent_this %}
+{% set is_draft    = email.folder_status == 'draft' %}
 
 <!-- ── Header ── -->
 <div class="page-header" style="margin-bottom:12px;">
@@ -46,7 +45,8 @@
     {% if email.folder_status != 'quarantine' %}
     <form method="POST" action="{{ url_for('email.move_to_quarantine', email_id=email.email_id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn-warning btn-sm" type="submit" onclick="return confirm('Move to quarantine?')">🔒 Quarantine</button>
+      <button class="btn btn-warning btn-sm" type="submit"
+              onclick="return confirm('Move to quarantine?')">🔒 Quarantine</button>
     </form>
     {% endif %}
     {% endif %}
@@ -57,14 +57,15 @@
       <button class="btn btn-secondary btn-sm" type="submit">↩️ Restore</button>
     </form>
     <form method="POST" action="{{ url_for('email.delete_permanent', email_id=email.email_id) }}"
-          onsubmit="return confirm('Permanently delete?')">
+          onsubmit="return confirm('Permanently delete? Cannot be undone!')">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn btn-danger btn-sm" type="submit">⛔ Delete Forever</button>
     </form>
     {% else %}
     <form method="POST" action="{{ url_for('email.delete_email', email_id=email.email_id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn-danger btn-sm" type="submit" onclick="return confirm('Move to Trash?')">🗑️ Delete</button>
+      <button class="btn btn-danger btn-sm" type="submit"
+              onclick="return confirm('Move to Trash?')">🗑️ Delete</button>
     </form>
     {% endif %}
   </div>
@@ -72,7 +73,6 @@
 
 <!-- ══ SECURITY SECTION ══ -->
 {% if is_my_sent or is_draft %}
-<!-- Sent by me OR Draft -->
 <div class="sec-banner" style="background:#f0fdf4;border:2px solid #22c55e;margin-bottom:12px;">
   <div class="banner-left">
     <div class="banner-icon">{{ '📝' if is_draft else '📤' }}</div>
@@ -92,7 +92,6 @@
 </div>
 
 {% elif clf %}
-  <!-- Classification banner -->
   {% if clf.label == 'phishing' %}
   <div class="sec-banner banner-phishing" style="margin-bottom:8px;">
     <div class="banner-left">
@@ -137,7 +136,6 @@
   </div>
   {% endif %}
 
-  <!-- WHY FLAGGED -->
   {% if clf.label in ['phishing','suspicious'] %}
   <div class="reasons-card" style="margin-bottom:8px;">
     <div class="reasons-header">
@@ -177,7 +175,7 @@
         <div class="reason-box-icon">🎭</div>
         <div class="reason-box-content">
           <div class="reason-box-title">Brand Impersonation</div>
-          <div class="reason-box-desc">Claims to be from a known brand but sender domain doesn't match.</div>
+          <div class="reason-box-desc">Claims to be from a known brand but sender doesn't match.</div>
           <div class="reason-box-score">
             <div class="rscore-bar"><div class="rscore-fill rfill-red" style="width:{{ nlp.impersonation_score }}%"></div></div>
             <span>{{ nlp.impersonation_score|round|int }}/100</span>
@@ -245,9 +243,7 @@
   {% endif %}
 
 {% else %}
-  <!-- No classification yet -->
-  {% if email.email_direction == 'sent' and not i_sent_this %}
-  <!-- Received email that happens to have direction=sent (e.g. admin sent to this user) -->
+  {% if not is_my_sent %}
   <div class="sec-banner" style="background:#f9fafb;border:1px solid #e5e7eb;margin-bottom:12px;">
     <div class="banner-left">
       <div class="banner-icon" style="animation:spin 2s linear infinite;">⏳</div>
@@ -259,20 +255,11 @@
     <div style="color:#9ca3af;font-size:13px;">Refreshing in <span id="cd">3</span>s...</div>
   </div>
   <style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style>
-  <script>let c=3;const cd=document.getElementById('cd');setInterval(()=>{c--;if(cd)cd.textContent=c;if(c<=0)location.reload();},1000);</script>
-  {% elif not is_my_sent %}
-  <div class="sec-banner" style="background:#f9fafb;border:1px solid #e5e7eb;margin-bottom:12px;">
-    <div class="banner-left">
-      <div class="banner-icon" style="animation:spin 2s linear infinite;">⏳</div>
-      <div>
-        <div class="banner-title" style="color:#374151;">Analysing email...</div>
-        <div class="banner-sub" style="color:#6b7280;">AI check running — updates automatically.</div>
-      </div>
-    </div>
-    <div style="color:#9ca3af;font-size:13px;">Refreshing in <span id="cd2">3</span>s...</div>
-  </div>
-  <style>@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}</style>
-  <script>let c2=3;const cd2=document.getElementById('cd2');setInterval(()=>{c2--;if(cd2)cd2.textContent=c2;if(c2<=0)location.reload();},1000);</script>
+  <script>
+    let c=3;
+    const cd=document.getElementById('cd');
+    setInterval(()=>{c--;if(cd)cd.textContent=c;if(c<=0)location.reload();},1000);
+  </script>
   {% endif %}
 {% endif %}
 
@@ -290,10 +277,10 @@
     <tr>
       <td style="padding:5px 16px 5px 0;color:#9ca3af;font-weight:600;">Date</td>
       <td>
-        <!-- Fix 1: Local time -->
+        {% set display_time = email.sent_time or email.received_time %}
         <span id="email-date"
-              data-utc="{{ email.received_time.strftime('%Y-%m-%dT%H:%M:%SZ') if email.received_time else '' }}">
-          {{ email.received_time.strftime('%A, %B %d %Y at %H:%M UTC') if email.received_time else '—' }}
+              data-utc="{{ display_time.strftime('%Y-%m-%dT%H:%M:%SZ') if display_time else '' }}">
+          {{ display_time.strftime('%A, %B %d %Y at %H:%M') if display_time else '—' }}
         </span>
       </td>
     </tr>
@@ -328,7 +315,8 @@
   {% else %}
   <form method="POST" action="{{ url_for('email.delete_email', email_id=email.email_id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button class="btn btn-danger" type="submit" onclick="return confirm('Move to Trash?')">🗑️ Delete</button>
+    <button class="btn btn-danger" type="submit"
+            onclick="return confirm('Move to Trash?')">🗑️ Delete</button>
   </form>
   {% endif %}
   {% endif %}
@@ -379,19 +367,25 @@
 @media(max-width:700px){.reasons-grid{grid-template-columns:1fr;}.banner-score-box{display:none;}}
 </style>
 
-<!-- Fix 1: Convert UTC to local time -->
+<!-- Local time conversion -->
 <script>
 (function() {
   const el  = document.getElementById('email-date');
   const utc = el ? el.dataset.utc : null;
   if (!utc) return;
   try {
-    const d = new Date(utc);
+    // Ensure Z suffix for UTC interpretation
+    const raw = utc.endsWith('Z') || utc.includes('+') ? utc : utc + 'Z';
+    const d   = new Date(raw);
     if (isNaN(d)) return;
     el.textContent = d.toLocaleString([], {
-      weekday: 'long', year: 'numeric',
-      month:   'long', day: 'numeric',
-      hour:    '2-digit', minute: '2-digit'
+      weekday:      'long',
+      year:         'numeric',
+      month:        'long',
+      day:          'numeric',
+      hour:         '2-digit',
+      minute:       '2-digit',
+      timeZoneName: 'short'
     });
   } catch(e) {}
 })();
