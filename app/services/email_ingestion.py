@@ -106,9 +106,10 @@ def _fetch_mailbox(imap_host, imap_port, imap_email, imap_pw,
                 logger.warning(f"[{label}] Folder select error {folder}: {e}")
                 continue
  
-            _, data = mail.search(None, "ALL")
+            # UNSEEN only — much faster, no re-processing old emails
+            _, data = mail.search(None, "UNSEEN")
             uid_list = data[0].split()
-            logger.info(f"[{label}] {len(uid_list)} emails in {folder}.")
+            logger.info(f"[{label}] {len(uid_list)} UNSEEN emails in {folder}.")
  
             for uid in uid_list:
                 try:
@@ -127,7 +128,18 @@ def _fetch_mailbox(imap_host, imap_port, imap_email, imap_pw,
                     )
                     if email_record:
                         new_count += 1
-                        _run_analysis_pipeline(email_record, db, cfg)
+                        # Run analysis in background so IMAP is not blocked
+                        import threading as _th
+                        _eid = email_record.email_id
+                        def _bg(_app=app, _id=_eid, _cfg=cfg):
+                            with _app.app_context():
+                                from app import db as _db
+                                from app.models.email_model import Email
+                                _em = Email.query.get(_id)
+                                if _em:
+                                    _run_analysis_pipeline(_em, _db, _cfg)
+                                _db.session.remove()
+                        _th.Thread(target=_bg, daemon=True).start()
  
                 except Exception as e:
                     logger.error(f"[{label}] Error on UID {uid}: {e}")
@@ -203,11 +215,27 @@ def _run_analysis_pipeline(email_record, db, cfg):
     db.session.commit()
  
     try:
-        # 1. NLP
+        # 1. NLP Analysis — include subject (2x) for better detection
         mon.processing_stage = "nlp_analysis"
         db.session.commit()
+
+        _subject = email_record.subject or ""
+        _body    = email_record.email_body or ""
+
+        # Extract text from HTML if body is empty
+        if not _body.strip() and email_record.email_html:
+            import re as _re
+            _html = email_record.email_html
+            _html = _re.sub(r'<style[^>]*>.*?</style>', ' ', _html, flags=_re.DOTALL|_re.IGNORECASE)
+            _html = _re.sub(r'<script[^>]*>.*?</script>', ' ', _html, flags=_re.DOTALL|_re.IGNORECASE)
+            _html = _re.sub(r'<[^>]+>', ' ', _html)
+            _body = _re.sub(r'\s+', ' ', _html).strip()
+
+        # Subject 2x weight — catches short spam/phishing subjects
+        _full_text = f"{_subject}\n{_subject}\n{_body}".strip() or _subject
+
         nlp_result = nlp_analyzer.analyze_text(
-            email_record.email_body or "", email_record.sender_email
+            _full_text, email_record.sender_email
         )
         db.session.add(NLPAnalysis(email_id=email_record.email_id, **nlp_result))
  

@@ -122,23 +122,24 @@ try:
 
     scheduler = BackgroundScheduler()
 
-    # Fallback email poll every 30 seconds
+    # Fallback email poll every 5 minutes
+    # IMAP IDLE handles real-time — this is just a safety net
     scheduler.add_job(
         func             = fetch_and_process_emails,
         args             = [app],
         trigger          = "interval",
-        seconds          = 30,
+        minutes          = 5,
         id               = "email_poll",
         max_instances    = 1,
         replace_existing = True,
     )
 
-    # Re-analyse any wrong emails every 2 minutes
+    # Re-analyse wrong emails every 30 minutes (not 2 min — causes slowdowns)
     scheduler.add_job(
         func             = _analyse_pending_emails,
         args             = [app],
         trigger          = "interval",
-        minutes          = 2,
+        minutes          = 30,
         id               = "analyse_pending",
         max_instances    = 1,
         replace_existing = True,

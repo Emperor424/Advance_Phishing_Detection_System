@@ -74,10 +74,10 @@ def _run_session(app):
     mail.login(cfg.get("IMAP_EMAIL", ""), cfg.get("IMAP_PASSWORD", ""))
     logger.info(f"Gmail connected: {cfg.get('IMAP_EMAIL')}")
 
-    # Initial full sync of all folders
-    _sync_folder(app, mail, "INBOX",          "inbox", "received", unseen_only=False)
-    _sync_folder(app, mail, "[Gmail]/Spam",   "spam",  "received", unseen_only=False)
-    _sync_folder(app, mail, "[Gmail]/Sent Mail", "sent", "sent",   unseen_only=False)
+    # Initial sync — UNSEEN only for speed (historical emails already in DB)
+    _sync_folder(app, mail, "INBOX",             "inbox", "received", unseen_only=True)
+    _sync_folder(app, mail, "[Gmail]/Spam",      "spam",  "received", unseen_only=True)
+    _sync_folder(app, mail, "[Gmail]/Sent Mail", "sent",  "sent",     unseen_only=True)
 
     logger.info("Full sync done — IDLE starting on INBOX...")
     mail.select("INBOX")
@@ -202,9 +202,25 @@ def _sync_folder(app, mail, imap_folder, pg_folder, direction,
                     if record:
                         new_count += 1
                         if direction == "received":
-                            # Pass original_folder so analysis preserves it
-                            _fast_analyse(record, db, app.config,
-                                          original_folder=pg_folder)
+                            # Run analysis in background thread
+                            # so IMAP IDLE is NOT blocked
+                            import threading
+                            _rid  = record.email_id
+                            _cfg  = app.config
+                            _ofld = pg_folder
+                            def _bg_analyse(_app=app, _id=_rid,
+                                            _cfg=_cfg, _ofld=_ofld):
+                                with _app.app_context():
+                                    from app import db as _db
+                                    from app.models.email_model import Email
+                                    _em = Email.query.get(_id)
+                                    if _em:
+                                        _fast_analyse(_em, _db, _cfg,
+                                                      original_folder=_ofld)
+                                    _db.session.remove()
+                            threading.Thread(
+                                target=_bg_analyse, daemon=True
+                            ).start()
                     db.session.remove()
 
             except Exception as e:

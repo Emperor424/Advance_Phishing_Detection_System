@@ -1,11 +1,12 @@
 """
-NLP Analyzer — Robust version with Trusted Domain Whitelist.
-Real emails from Google, Microsoft etc. are never flagged.
+NLP Analyzer — Robust phishing detection.
+Includes subject in analysis + boosted scoring for spam detection.
 """
 import re
 from typing import Dict, List
 
-# ── Trusted domains — NEVER flag as phishing ──────────────────────────────────
+# ── Trusted domains — NEVER flag as phishing ─────────────────────────────────
+# ONLY system/notification domains — NOT user email providers!
 TRUSTED_DOMAINS = {
     # Google system notifications only
     "accounts.google.com",
@@ -16,10 +17,13 @@ TRUSTED_DOMAINS = {
     "microsoftonline.com",
     # Amazon SES (email delivery system)
     "amazonses.com",
-    # Other systems
+    # Other trusted systems
     "github.com",
     "zoom.us",
 }
+# NOTE: gmail.com, yahoo.com, icloud.com, hotmail.com are NOT trusted
+# Any attacker can create these accounts to send phishing!
+
 URGENCY_KEYWORDS = [
     "urgent", "immediately", "act now", "action required",
     "expires", "limited time", "last chance", "final notice",
@@ -72,19 +76,17 @@ SUSPICIOUS_TLDS = {
 def _extract_sender_domain(sender_email: str) -> str:
     """Extract domain from sender like 'Google <no-reply@accounts.google.com>'"""
     sender_lower = sender_email.lower()
-    # Handle "Display Name <email@domain.com>" format
     if "<" in sender_lower:
         match = re.search(r'@([\w.\-]+)>', sender_lower)
         if match:
             return match.group(1).strip()
-    # Handle plain "email@domain.com" format
     if "@" in sender_lower:
         return sender_lower.split("@")[-1].strip().strip(">")
     return sender_lower
 
 
 def _is_trusted_sender(sender_domain: str) -> bool:
-    """Check if sender is from a trusted domain."""
+    """Check if sender is from a trusted SYSTEM domain."""
     for trusted in TRUSTED_DOMAINS:
         if sender_domain == trusted or sender_domain.endswith("." + trusted):
             return True
@@ -93,9 +95,11 @@ def _is_trusted_sender(sender_domain: str) -> bool:
 
 def analyze_text(email_body: str, sender_email: str = "") -> Dict:
     """
-    Analyze email for phishing. Trusted senders always return SAFE.
+    Analyze email text for phishing indicators.
+    NOTE: Pass subject + body combined for best results.
+    Trusted system senders always return SAFE score.
     """
-    # ── Trusted sender check (first priority) ────────────────────────────────
+    # ── Trusted sender check ──────────────────────────────────────────────────
     sender_domain = _extract_sender_domain(sender_email)
 
     if _is_trusted_sender(sender_domain):
@@ -109,10 +113,10 @@ def analyze_text(email_body: str, sender_email: str = "") -> Dict:
             "text_risk_score":     0.0,
         }
 
-    # ── Analyze sender domain for suspicious signals ──────────────────────────
+    # ── Analyze sender domain ─────────────────────────────────────────────────
     sender_score = _analyze_sender_domain(sender_domain)
 
-    # ── If body is empty, use sender domain score ─────────────────────────────
+    # ── Empty body → use sender domain score ──────────────────────────────────
     if not email_body or not email_body.strip():
         return {
             "urgency_score":       sender_score,
@@ -181,11 +185,9 @@ def _analyze_sender_domain(domain: str) -> float:
     score = 0.0
     tld = domain.split(".")[-1] if "." in domain else ""
 
-    # Suspicious TLD
     if tld in SUSPICIOUS_TLDS:
         score += 60.0
 
-    # Number substitution (m1crosoft, paypa1 etc.)
     denumbered = (domain.replace("0", "o").replace("1", "l")
                         .replace("3", "e").replace("4", "a")
                         .replace("5", "s"))
@@ -204,10 +206,30 @@ def _analyze_sender_domain(domain: str) -> float:
 
 
 def _urgency_score(text_lower: str) -> float:
-    hits         = sum(1 for kw in URGENCY_KEYWORDS if kw in text_lower)
+    """
+    Score urgency indicators.
+    FIX: Higher weight + combo boost when urgency + credential keywords together.
+    This catches 'Action Required: Your Password Expires Today' type emails.
+    """
+    hits      = sum(1 for kw in URGENCY_KEYWORDS   if kw in text_lower)
+    cred_hits = sum(1 for kw in CREDENTIAL_KEYWORDS if kw in text_lower)
+    susp_hits = sum(1 for kw in SUSPICIOUS_KEYWORDS if kw in text_lower)
+
+    # Subject line (first line) gets extra weight
     first_line   = text_lower.split('\n')[0]
-    subject_hits = sum(1 for kw in URGENCY_KEYWORDS if kw in first_line)
-    return min(100.0, (hits + subject_hits) * 6.0)
+    subject_hits = sum(1 for kw in URGENCY_KEYWORDS   if kw in first_line)
+    subject_cred = sum(1 for kw in CREDENTIAL_KEYWORDS if kw in first_line)
+    subject_susp = sum(1 for kw in SUSPICIOUS_KEYWORDS if kw in first_line)
+
+    # Boost when urgency + credential appear together (classic phishing pattern)
+    combo_boost = 0.0
+    if hits > 0 and cred_hits > 0:
+        combo_boost += 20.0   # e.g. "urgent" + "password"
+    if susp_hits > 0 and (hits > 0 or cred_hits > 0):
+        combo_boost += 10.0   # e.g. "congratulations" + "verify"
+
+    total_hits = hits + subject_hits + subject_cred + subject_susp
+    return min(100.0, total_hits * 8.0 + combo_boost)
 
 
 def _sentiment_score(text_lower: str) -> float:

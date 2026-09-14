@@ -1,7 +1,5 @@
 """
-IMAP IDLE Service — Real-Time Email Detection
-Gmail ले नयाँ email आउनासाथ PhishGuard लाई notify गर्छ।
-Gmail जस्तै instant detection!
+
 """
 import imaplib
 import threading
@@ -29,8 +27,7 @@ def start_imap_idle(app):
 
 def _idle_loop(app):
     """
-    मुख्य IDLE loop — सधैं चलिरहन्छ।
-    Connection टुटियो भने automatically reconnect गर्छ।
+   
     """
     RECONNECT_WAIT = 10  # seconds बाद retry
 
@@ -46,8 +43,7 @@ def _idle_loop(app):
 
 def _run_idle_session(app):
     """
-    एउटा IMAP IDLE session चलाउँछ।
-    नयाँ email आयो भने तुरुन्त process गर्छ।
+    
     """
     cfg      = app.config
     host     = cfg.get("IMAP_HOST", "imap.gmail.com")
@@ -64,7 +60,6 @@ def _run_idle_session(app):
     # पहिले existing unprocessed emails check गर्नुस्
     _fetch_new_emails(app, mail)
 
-    # IDLE loop — Gmail ले notify नगरुन्जेल wait गर्छ
     IDLE_TIMEOUT = 29 * 60  # 29 minutes (Gmail IDLE timeout भन्दा कम)
 
     while True:
@@ -80,7 +75,7 @@ def _run_idle_session(app):
             if response:
                 # नयाँ email आयो!
                 logger.info("New email detected! Processing...")
-                # IDLE बाट बाहिर निस्कनुस्
+                
                 mail.send(b"DONE\r\n")
                 time.sleep(1)  # Server को लागि थोरै wait
                 # Email fetch र process गर्नुस्
@@ -106,8 +101,7 @@ def _run_idle_session(app):
 
 def _wait_for_exists(mail):
     """
-    Gmail बाट * EXISTS notification आउन कुर्छ।
-    यो आयो भने नयाँ email आएको हो।
+    
     """
     try:
         while True:
@@ -130,7 +124,7 @@ def _wait_for_exists(mail):
 
 def _fetch_new_emails(app, mail):
     """
-    नयाँ (unprocessed) emails fetch गरेर analysis pipeline चलाउँछ।
+    
     """
     try:
         with app.app_context():
@@ -140,8 +134,8 @@ def _fetch_new_emails(app, mail):
                 _parse_and_store, _run_analysis_pipeline
             )
 
-            # सबै emails हेर्छ — Message-ID ले duplicate skip गर्छ
-            _, data = mail.search(None, "ALL")
+           
+            _, data = mail.search(None, "UNSEEN")
             uid_list = data[0].split()
 
             if not uid_list:
